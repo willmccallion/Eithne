@@ -32,7 +32,7 @@ else
     cargo build --target "$UEFI_TARGET"
 fi
 
-EFI_BINARY="target/$UEFI_TARGET/$PROFILE/oxeidia-kernel.efi"
+EFI_BINARY="target/$UEFI_TARGET/$PROFILE/eithne.efi"
 
 if [ ! -f "$EFI_BINARY" ]; then
     echo "ERROR: $EFI_BINARY not found"

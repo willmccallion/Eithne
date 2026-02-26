@@ -22,8 +22,8 @@ use uefi::prelude::*;
 fn efi_main() -> Status {
     arch::early_init();
 
-    println!("[oxeidia] kernel booting...");
-    println!("[oxeidia] architecture: {}", arch::ARCH_NAME);
+    println!("[eithne] kernel booting...");
+    println!("[eithne] architecture: {}", arch::ARCH_NAME);
 
     // Exit UEFI boot services and get the final memory map.
     // After this call, UEFI boot services are gone — only runtime services
@@ -39,7 +39,7 @@ fn efi_main() -> Status {
 }
 
 fn kernel_main(boot_info: mm::boot_info::BootMemoryInfo) {
-    println!("[oxeidia] entering kernel_main");
+    println!("[eithne] entering kernel_main");
 
     // 1. Initialize memory management (frame allocator + heap)
     mm::init(&boot_info);
@@ -54,6 +54,6 @@ fn kernel_main(boot_info: mm::boot_info::BootMemoryInfo) {
     // 4. fs::init()       — mount root filesystem
     // 5. syscall::init()  — register syscall handler
 
-    println!("[oxeidia] initialization complete — halting.");
+    println!("[eithne] initialization complete — halting.");
     arch::halt();
 }

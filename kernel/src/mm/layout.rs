@@ -1,6 +1,6 @@
-/// Kernel virtual memory layout constants.
-///
-/// Defines the virtual address space partitioning between kernel and user space.
+//! Kernel virtual memory layout constants.
+//!
+//! Defines the virtual address space partitioning between kernel and user space.
 
 /// Start of the kernel's virtual address space (upper half).
 /// On x86_64: 0xFFFF_8000_0000_0000

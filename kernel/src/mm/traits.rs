@@ -59,15 +59,22 @@ pub enum UnmapError {
 
 /// Physical frame allocator.
 ///
-/// Manages allocation and deallocation of physical memory frames (typically 4 KiB).
+/// Manages allocation and deallocation of physical memory in page-sized
+/// (or multi-page) units. Implementations must be safe to use behind a lock.
 pub trait FrameAllocator {
-    /// Allocate a single physical frame. Returns None if out of memory.
+    /// Allocate a single physical frame (4 KiB). Returns None if OOM.
     fn alloc_frame(&mut self) -> Option<PhysAddr>;
 
-    /// Deallocate a previously allocated frame.
+    /// Deallocate a single physical frame.
     fn dealloc_frame(&mut self, frame: PhysAddr);
 
-    /// Return the number of free frames available.
+    /// Allocate 2^order contiguous physical pages.
+    fn alloc_pages(&mut self, order: usize) -> Option<PhysAddr>;
+
+    /// Deallocate 2^order contiguous physical pages.
+    fn dealloc_pages(&mut self, addr: PhysAddr, order: usize);
+
+    /// Return the number of free frames (order-0 equivalent) available.
     fn free_frame_count(&self) -> usize;
 }
 

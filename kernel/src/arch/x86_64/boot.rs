@@ -1,8 +1,8 @@
-/// x86_64 UEFI boot handoff.
-///
-/// After UEFI hands control to us, we're already in long mode with
-/// identity-mapped memory. This module handles any additional early
-/// setup before the generic kernel takes over.
+//! x86_64 UEFI boot handoff.
+//!
+//! After UEFI hands control to us, we're already in long mode with
+//! identity-mapped memory. This module handles any additional early
+//! setup before the generic kernel takes over.
 
 pub fn post_uefi_init() {
     // UEFI has already set up:

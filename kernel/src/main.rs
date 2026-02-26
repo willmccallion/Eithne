@@ -2,6 +2,8 @@
 #![no_main]
 #![allow(dead_code, unused_imports)]
 
+extern crate alloc;
+
 mod arch;
 mod console;
 mod drivers;
@@ -13,6 +15,7 @@ mod sched;
 mod sync;
 mod syscall;
 
+use uefi::boot::{self, MemoryType};
 use uefi::prelude::*;
 
 #[entry]
@@ -22,21 +25,32 @@ fn efi_main() -> Status {
     println!("[oxeidia] kernel booting...");
     println!("[oxeidia] architecture: {}", arch::ARCH_NAME);
 
-    kernel_main();
+    // Exit UEFI boot services and get the final memory map.
+    // After this call, UEFI boot services are gone — only runtime services
+    // and our own hardware access (serial) remain.
+    let mmap = unsafe { boot::exit_boot_services(MemoryType::LOADER_DATA) };
+
+    // Parse memory map into our fixed-size representation (no heap needed)
+    let boot_info = mm::boot_info::BootMemoryInfo::from_uefi_mmap(&mmap);
+
+    kernel_main(boot_info);
 
     Status::SUCCESS
 }
 
-fn kernel_main() {
+fn kernel_main(boot_info: mm::boot_info::BootMemoryInfo) {
     println!("[oxeidia] entering kernel_main");
 
-    // Future init order:
-    // 1. mm::init()       — set up frame allocator, page tables, heap
+    // 1. Initialize memory management (frame allocator + heap)
+    mm::init(&boot_info);
+
+    // After mm::init(), alloc crate works (Vec, Box, String, etc.)
+
     // 2. sched::init()    — initialize scheduler
     // 3. drivers::init()  — probe and init hardware
     // 4. fs::init()       — mount root filesystem
     // 5. syscall::init()  — register syscall handler
 
-    println!("[oxeidia] nothing to do yet — halting.");
+    println!("[oxeidia] initialization complete — halting.");
     arch::halt();
 }

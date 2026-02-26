@@ -71,6 +71,35 @@ impl VirtAddr {
     }
 }
 
+/// Convert physical to virtual address.
+///
+/// Currently identity-mapped (UEFI gives us 1:1 phys=virt).
+/// When we set up a higher-half kernel, this will add KERNEL_VIRT_BASE.
+#[inline(always)]
+pub const fn phys_to_virt(phys: PhysAddr) -> VirtAddr {
+    VirtAddr::new(phys.as_u64())
+}
+
+/// Convert virtual to physical address.
+///
+/// Inverse of `phys_to_virt`. Only valid for the kernel direct-map region.
+#[inline(always)]
+pub const fn virt_to_phys(virt: VirtAddr) -> PhysAddr {
+    PhysAddr::new(virt.as_u64())
+}
+
+impl From<u64> for PhysAddr {
+    fn from(addr: u64) -> Self {
+        Self(addr)
+    }
+}
+
+impl From<u64> for VirtAddr {
+    fn from(addr: u64) -> Self {
+        Self(addr)
+    }
+}
+
 impl core::fmt::Display for PhysAddr {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         write!(f, "PhysAddr({:#x})", self.0)

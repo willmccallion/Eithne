@@ -3,6 +3,7 @@ pub mod cpu;
 pub mod gdt;
 pub mod idt;
 pub mod interrupts;
+pub mod io;
 pub mod paging;
 pub mod serial;
 
@@ -16,7 +17,11 @@ impl ArchPlatform for Platform {
     }
 
     fn init_interrupts() {
-        // TODO: set up IDT, PIC/APIC
+        gdt::init();
+        idt::init();
+        interrupts::init_pic();
+        crate::println!("[arch] enabling interrupts");
+        unsafe { core::arch::asm!("sti", options(nomem, nostack)) };
     }
 
     fn halt() -> ! {

@@ -36,6 +36,10 @@ pub fn write_serial(s: &str) {
     platform::Platform::write_serial(s);
 }
 
+pub fn init_interrupts() {
+    platform::Platform::init_interrupts();
+}
+
 pub fn enable_interrupts() {
     platform::Platform::enable_interrupts();
 }

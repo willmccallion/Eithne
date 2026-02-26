@@ -46,7 +46,10 @@ fn kernel_main(boot_info: mm::boot_info::BootMemoryInfo) {
 
     // After mm::init(), alloc crate works (Vec, Box, String, etc.)
 
-    // 2. sched::init()    — initialize scheduler
+    // 2. Initialize interrupts (GDT, IDT, PIC)
+    arch::init_interrupts();
+
+    // 3. sched::init()    — initialize scheduler
     // 3. drivers::init()  — probe and init hardware
     // 4. fs::init()       — mount root filesystem
     // 5. syscall::init()  — register syscall handler

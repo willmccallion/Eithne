@@ -1,4 +1,6 @@
 /// COM1 serial port (0x3F8) for early debug output.
+use super::io::{inb, outb};
+
 const COM1: u16 = 0x3F8;
 
 /// Initialize COM1 serial port.
@@ -39,30 +41,4 @@ pub fn write_str(s: &str) {
         }
         write_byte(byte);
     }
-}
-
-#[inline]
-unsafe fn outb(port: u16, val: u8) {
-    unsafe {
-        core::arch::asm!(
-            "out dx, al",
-            in("dx") port,
-            in("al") val,
-            options(nomem, nostack, preserves_flags),
-        );
-    }
-}
-
-#[inline]
-unsafe fn inb(port: u16) -> u8 {
-    let val: u8;
-    unsafe {
-        core::arch::asm!(
-            "in al, dx",
-            in("dx") port,
-            out("al") val,
-            options(nomem, nostack, preserves_flags),
-        );
-    }
-    val
 }

@@ -180,16 +180,13 @@ impl KernelAddressSpace {
         Some(Self { cr3 })
     }
 
-    /// Create a new address space pre-populated with **all** kernel mappings
-    /// copied from the currently active PML4.
+    /// Create a new user address space.
     ///
-    /// This includes both the identity-map entries in the lower half (where
-    /// kernel code/data live) and the higher-half direct-map entries (indices
-    /// 256-511).  Both are required because the kernel executes at identity-
-    /// mapped addresses and accesses physical memory via the direct map.
-    ///
-    /// User-space pages are added afterwards via `map()` into the lower-half
-    /// slots that are not occupied by the kernel's identity map.
+    /// All 512 PML4 entries are copied from the currently active page table
+    /// so that the kernel identity map and direct map remain accessible.
+    /// User pages must be mapped into regions that don't overlap with
+    /// existing kernel/UEFI mappings — use `find_free_user_base()` to pick
+    /// a safe virtual address range.
     pub fn new_with_kernel_mappings() -> Result<Self, crate::mm::traits::MapError> {
         let new = Self::new().ok_or(crate::mm::traits::MapError::FrameAllocationFailed)?;
 
@@ -201,11 +198,27 @@ impl KernelAddressSpace {
         let new_pml4 = unsafe {
             &mut *(phys_to_virt(new.cr3).as_mut_ptr::<PageTable>())
         };
+
         for i in 0..512 {
             new_pml4.entries[i] = cur_pml4.entries[i];
         }
 
         Ok(new)
+    }
+
+    /// Find the lowest empty PML4 slot in the lower canonical half (0-255)
+    /// and return its base virtual address.  Each PML4 slot covers 512 GiB.
+    ///
+    /// User code/stack should be placed within this range to avoid any
+    /// conflict with kernel or UEFI identity-map entries.
+    pub fn find_free_user_base(&self) -> Option<u64> {
+        let pml4 = self.pml4_ref();
+        for i in 0..256 {
+            if !pml4.entries[i].is_present() {
+                return Some((i as u64) << 39);
+            }
+        }
+        None
     }
 
     /// Build an address space from the currently active CR3 value.
@@ -242,6 +255,55 @@ impl KernelAddressSpace {
     }
 }
 
+/// Ensure an intermediate page table entry is present and (if `want_user`
+/// is true) has the USER flag set.
+///
+/// Three cases:
+///   1. Entry absent → allocate a fresh zeroed table with the right flags.
+///   2. Entry present with USER already set (or `want_user` is false) → just
+///      walk through.
+///   3. Entry present but lacking USER and `want_user` is true → deep-copy
+///      the pointed-to table into a new private copy, then set USER on the
+///      entry.  This avoids mutating shared kernel page tables.
+fn ensure_table<'a>(
+    entry: &mut PageTableEntry,
+    want_user: bool,
+) -> Result<&'a mut PageTable, MapError> {
+    if entry.is_present() {
+        // Huge pages (PDPT 1G or PD 2M) cannot be walked as tables.
+        if entry.0 & flags::HUGE != 0 {
+            crate::println!(
+                "[paging] ensure_table: hit huge page entry={:#x}",
+                entry.0,
+            );
+            return Err(MapError::AlreadyMapped);
+        }
+        let has_user = entry.0 & flags::USER != 0;
+        if want_user && !has_user {
+            // Deep-copy the next-level table so we own it privately.
+            let src = unsafe {
+                &*(phys_to_virt(entry.phys_addr()).as_ptr::<PageTable>())
+            };
+            let dst = unsafe { alloc_table().ok_or(MapError::FrameAllocationFailed)? };
+            for k in 0..512 {
+                dst.entries[k] = src.entries[k];
+            }
+            let dst_phys = virt_to_phys(VirtAddr::new(dst as *mut PageTable as u64));
+            entry.set(dst_phys, (entry.0 & !flags::ADDR_MASK) | flags::USER);
+            Ok(dst)
+        } else {
+            Ok(unsafe { table_from_entry(*entry) })
+        }
+    } else {
+        let t = unsafe { alloc_table().ok_or(MapError::FrameAllocationFailed)? };
+        entry.set(
+            virt_to_phys(VirtAddr::new(t as *mut PageTable as u64)),
+            PageTableEntry::intermediate_flags(want_user),
+        );
+        Ok(t)
+    }
+}
+
 impl PageMapper for KernelAddressSpace {
     fn map(
         &mut self,
@@ -255,43 +317,17 @@ impl PageMapper for KernelAddressSpace {
             return Err(MapError::InvalidAddress);
         }
 
+        let want_user = page_flags.user_accessible;
         let pml4 = self.pml4();
 
         // PML4 → PDPT
-        let pdpt: &mut PageTable = if pml4.entries[i4].is_present() {
-            unsafe { table_from_entry(pml4.entries[i4]) }
-        } else {
-            let t = unsafe { alloc_table().ok_or(MapError::FrameAllocationFailed)? };
-            pml4.entries[i4].set(
-                virt_to_phys(VirtAddr::new(t as *mut PageTable as u64)),
-                PageTableEntry::intermediate_flags(page_flags.user_accessible),
-            );
-            t
-        };
+        let pdpt = ensure_table(&mut pml4.entries[i4], want_user)?;
 
         // PDPT → PD
-        let pd: &mut PageTable = if pdpt.entries[i3].is_present() {
-            unsafe { table_from_entry(pdpt.entries[i3]) }
-        } else {
-            let t = unsafe { alloc_table().ok_or(MapError::FrameAllocationFailed)? };
-            pdpt.entries[i3].set(
-                virt_to_phys(VirtAddr::new(t as *mut PageTable as u64)),
-                PageTableEntry::intermediate_flags(page_flags.user_accessible),
-            );
-            t
-        };
+        let pd = ensure_table(&mut pdpt.entries[i3], want_user)?;
 
         // PD → PT
-        let pt: &mut PageTable = if pd.entries[i2].is_present() {
-            unsafe { table_from_entry(pd.entries[i2]) }
-        } else {
-            let t = unsafe { alloc_table().ok_or(MapError::FrameAllocationFailed)? };
-            pd.entries[i2].set(
-                virt_to_phys(VirtAddr::new(t as *mut PageTable as u64)),
-                PageTableEntry::intermediate_flags(page_flags.user_accessible),
-            );
-            t
-        };
+        let pt = ensure_table(&mut pd.entries[i2], want_user)?;
 
         // PT → leaf
         if pt.entries[i1].is_present() {

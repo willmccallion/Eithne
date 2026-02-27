@@ -17,11 +17,11 @@ use super::traits::TaskId;
 // Virtual address layout for the user process
 // ---------------------------------------------------------------------------
 
-/// User code is loaded at this virtual address (2 MiB, canonical low half).
-pub const USER_CODE_BASE: u64 = 0x0000_0000_0040_0000;
+/// Offset from the dynamic PML4 base for user code.
+const USER_CODE_OFFSET: u64 = 0x0040_0000; // 4 MiB into the slot
 
-/// User stack top.  Stack grows downward; RSP starts here.
-pub const USER_STACK_TOP: u64 = 0x0000_0000_0080_0000;
+/// Offset from the dynamic PML4 base for user stack top.
+const USER_STACK_OFFSET: u64 = 0x0080_0000; // 8 MiB into the slot
 const USER_STACK_PAGES: usize = 4; // 16 KiB
 
 // ---------------------------------------------------------------------------
@@ -83,35 +83,40 @@ static USER_PROGRAM: &[u8] = &[
 // Page table creation
 // ---------------------------------------------------------------------------
 
-/// Build a user address space:
-///   - Copy all kernel-half (upper 256 PML4 entries) from the current CR3.
-///   - Map user code at USER_CODE_BASE.
-///   - Map user stack pages just below USER_STACK_TOP.
+/// Build a user address space.
 ///
-/// Returns the address space and the physical address of the user code page
-/// (so the caller can write the program into it).
+/// Copies all kernel page table entries, then finds an empty PML4 slot in
+/// the lower canonical half and maps user code + stack there.
+///
+/// Returns `(address_space, code_base, stack_top)`.
 fn build_user_aspace(
     code_phys: PhysAddr,
     stack_bottom_phys: PhysAddr,
-) -> Result<KernelAddressSpace, MapError> {
-    // Start with a fresh PML4 that has all kernel mappings already wired.
+) -> Result<(KernelAddressSpace, u64, u64), MapError> {
     let mut aspace = KernelAddressSpace::new_with_kernel_mappings()?;
 
+    let user_base = aspace
+        .find_free_user_base()
+        .ok_or(MapError::FrameAllocationFailed)?;
+    let code_base = user_base + USER_CODE_OFFSET;
+    let stack_top = user_base + USER_STACK_OFFSET;
+
+    crate::println!(
+        "[user] PML4 base={:#x}, code={:#x}, stack_top={:#x}",
+        user_base, code_base, stack_top,
+    );
+
     // Map user code page (RX, user-accessible, one page).
-    aspace.map(
-        VirtAddr::new(USER_CODE_BASE),
-        code_phys,
-        PageFlags::USER_RX,
-    )?;
+    aspace.map(VirtAddr::new(code_base), code_phys, PageFlags::USER_RX)?;
 
     // Map user stack pages (RW, user-accessible).
     for i in 0..USER_STACK_PAGES {
         let page_phys = stack_bottom_phys.offset((i * PAGE_SIZE) as u64);
-        let page_virt = VirtAddr::new(USER_STACK_TOP - ((USER_STACK_PAGES - i) * PAGE_SIZE) as u64);
+        let page_virt = VirtAddr::new(stack_top - ((USER_STACK_PAGES - i) * PAGE_SIZE) as u64);
         aspace.map(page_virt, page_phys, PageFlags::USER_RW)?;
     }
 
-    Ok(aspace)
+    Ok((aspace, code_base, stack_top))
 }
 
 // ---------------------------------------------------------------------------
@@ -141,8 +146,9 @@ pub fn create_user_task(id: TaskId) -> Option<Task> {
     )?;
 
     // 3. Build the user address space.
-    let aspace = build_user_aspace(code_phys, stack_bottom_phys)
-        .expect("[user] failed to build user address space");
+    let (aspace, user_code_base, user_stack_top) =
+        build_user_aspace(code_phys, stack_bottom_phys)
+            .expect("[user] failed to build user address space");
 
     // 4. Allocate a kernel stack for this task (used during syscall/interrupt).
     let kernel_stack_pages = super::context::TaskStack::STACK_PAGES;
@@ -153,7 +159,7 @@ pub fn create_user_task(id: TaskId) -> Option<Task> {
     let kstack_top = kstack_base.offset((kernel_stack_pages * PAGE_SIZE) as u64);
 
     // 5. Write the initial InterruptFrame at the top of the kernel stack.
-    //    iretq will land in ring 3 at USER_CODE_BASE with the user RSP.
+    //    iretq will land in ring 3 at the user code base with the user RSP.
     let frame_ptr = (kstack_top.as_u64()
         - core::mem::size_of::<InterruptFrame>() as u64) as *mut InterruptFrame;
     unsafe {
@@ -164,16 +170,15 @@ pub fn create_user_task(id: TaskId) -> Option<Task> {
             rcx: 0, rbx: 0, rax: 0,
             vector: 0xFD, // user task pseudo-vector
             error_code: 0,
-            rip: USER_CODE_BASE,
+            rip: user_code_base,
             cs: USER_CS,
             rflags: USER_RFLAGS,
-            rsp: USER_STACK_TOP,
+            rsp: user_stack_top,
             ss: USER_DS,
         });
     }
 
-    // 6. Build the Task.  We use a raw kernel stack (not TaskStack) so we
-    //    can also store the address space.
+    // 6. Build the Task.
     Some(Task {
         id,
         state: TaskState::Ready,

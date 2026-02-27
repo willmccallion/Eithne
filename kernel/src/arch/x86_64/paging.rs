@@ -195,9 +195,7 @@ impl KernelAddressSpace {
         let cur_pml4 = unsafe {
             &*(phys_to_virt(PhysAddr::new(cur_cr3 & flags::ADDR_MASK)).as_ptr::<PageTable>())
         };
-        let new_pml4 = unsafe {
-            &mut *(phys_to_virt(new.cr3).as_mut_ptr::<PageTable>())
-        };
+        let new_pml4 = unsafe { &mut *(phys_to_virt(new.cr3).as_mut_ptr::<PageTable>()) };
 
         for i in 0..512 {
             new_pml4.entries[i] = cur_pml4.entries[i];
@@ -272,18 +270,12 @@ fn ensure_table<'a>(
     if entry.is_present() {
         // Huge pages (PDPT 1G or PD 2M) cannot be walked as tables.
         if entry.0 & flags::HUGE != 0 {
-            crate::println!(
-                "[paging] ensure_table: hit huge page entry={:#x}",
-                entry.0,
-            );
             return Err(MapError::AlreadyMapped);
         }
         let has_user = entry.0 & flags::USER != 0;
         if want_user && !has_user {
             // Deep-copy the next-level table so we own it privately.
-            let src = unsafe {
-                &*(phys_to_virt(entry.phys_addr()).as_ptr::<PageTable>())
-            };
+            let src = unsafe { &*(phys_to_virt(entry.phys_addr()).as_ptr::<PageTable>()) };
             let dst = unsafe { alloc_table().ok_or(MapError::FrameAllocationFailed)? };
             for k in 0..512 {
                 dst.entries[k] = src.entries[k];

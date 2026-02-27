@@ -540,10 +540,19 @@ fn panic_dump(name: &str, frame: &InterruptFrame) -> ! {
     crate::println!("========================================");
     crate::println!("  KERNEL PANIC: {}", name);
     crate::println!("========================================");
-    crate::println!("  vector={:#x}  error_code={:#x}", frame.vector, frame.error_code);
+    crate::println!(
+        "  vector={:#x}  error_code={:#x}",
+        frame.vector,
+        frame.error_code
+    );
     crate::println!();
     crate::println!("  RIP={:#018x}  RSP={:#018x}", frame.rip, frame.rsp);
-    crate::println!("  CS={:#06x}  SS={:#06x}  RFLAGS={:#018x}", frame.cs, frame.ss, frame.rflags);
+    crate::println!(
+        "  CS={:#06x}  SS={:#06x}  RFLAGS={:#018x}",
+        frame.cs,
+        frame.ss,
+        frame.rflags
+    );
     crate::println!("  CR2={:#018x}  CR3={:#018x}", cr2, cr3);
     crate::println!();
     crate::println!("  RAX={:#018x}  RBX={:#018x}", frame.rax, frame.rbx);

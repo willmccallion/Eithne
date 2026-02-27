@@ -7,8 +7,8 @@ use super::traits::{SyscallError, SyscallResult};
 pub fn dispatch(num: usize, args: &[usize; 6]) -> SyscallResult {
     match num {
         SYS_WRITE => sys_write(args),
-        SYS_EXIT  => sys_exit(args),
-        _         => Err(SyscallError::InvalidSyscall),
+        SYS_EXIT => sys_exit(args),
+        _ => Err(SyscallError::InvalidSyscall),
     }
 }
 
@@ -22,9 +22,9 @@ pub fn dispatch(num: usize, args: &[usize; 6]) -> SyscallResult {
 // Here we trust it because our single user task lives in a known range.
 
 fn sys_write(args: &[usize; 6]) -> SyscallResult {
-    let _fd  = args[0];
-    let ptr  = args[1] as *const u8;
-    let len  = args[2];
+    let _fd = args[0];
+    let ptr = args[1] as *const u8;
+    let len = args[2];
 
     if len == 0 {
         return Ok(0);

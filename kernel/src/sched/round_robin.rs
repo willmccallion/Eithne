@@ -80,7 +80,12 @@ impl RoundRobinScheduler {
         };
 
         self.current = Some(next);
-        Some(PendingSwitch { old_rsp_ptr, new_rsp, new_kstack_top, new_cr3 })
+        Some(PendingSwitch {
+            old_rsp_ptr,
+            new_rsp,
+            new_kstack_top,
+            new_cr3,
+        })
     }
 
     /// Preemptive switch: outgoing RSP is supplied directly.

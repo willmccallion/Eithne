@@ -5,9 +5,9 @@
 
 use crate::arch::x86_64::paging::KernelAddressSpace;
 use crate::mm::addr::{PhysAddr, VirtAddr, phys_to_virt};
+use crate::mm::frame;
 use crate::mm::page::PAGE_SIZE;
 use crate::mm::traits::{AddressSpace, MapError, PageFlags, PageMapper};
-use crate::mm::frame;
 
 use super::context::InterruptFrame;
 use super::process::{Task, TaskState};
@@ -50,8 +50,7 @@ const USER_RFLAGS: u64 = 0x202; // IF=1, reserved=1
 static USER_PROGRAM: &[u8] = &[
     // --- write syscall ---
     // mov eax, 1              ; SYS_WRITE
-    0xB8, 0x01, 0x00, 0x00, 0x00,
-    // mov edi, 1              ; fd = stdout
+    0xB8, 0x01, 0x00, 0x00, 0x00, // mov edi, 1              ; fd = stdout
     0xBF, 0x01, 0x00, 0x00, 0x00,
     // lea rsi, [rip + msg]    ; buf ptr  (msg is 18 bytes after this instruction's end)
     // RIP after this instruction = USER_CODE_BASE + 15
@@ -61,22 +60,15 @@ static USER_PROGRAM: &[u8] = &[
     // RIP after lea = base + 5 + 5 + 7 = base + 17
     // msg is at base + 17 + 5 + 2 + 5 + 2 + 2 = base + 33
     // offset = 33 - 17 = 16
-    0x48, 0x8D, 0x35, 0x10, 0x00, 0x00, 0x00,
-    // mov edx, 22             ; len = 22
-    0xBA, 0x16, 0x00, 0x00, 0x00,
-    // syscall
-    0x0F, 0x05,
-    // --- exit syscall ---
+    0x48, 0x8D, 0x35, 0x10, 0x00, 0x00, 0x00, // mov edx, 22             ; len = 22
+    0xBA, 0x16, 0x00, 0x00, 0x00, // syscall
+    0x0F, 0x05, // --- exit syscall ---
     // mov eax, 60             ; SYS_EXIT
-    0xB8, 0x3C, 0x00, 0x00, 0x00,
-    // xor edi, edi            ; code = 0
-    0x31, 0xFF,
-    // syscall
-    0x0F, 0x05,
-    // --- message data ---
-    b'H', b'e', b'l', b'l', b'o', b' ', b'f', b'r', b'o', b'm',
-    b' ', b'u', b's', b'e', b'r', b' ', b'm', b'o', b'd', b'e',
-    b'!', b'\n',
+    0xB8, 0x3C, 0x00, 0x00, 0x00, // xor edi, edi            ; code = 0
+    0x31, 0xFF, // syscall
+    0x0F, 0x05, // --- message data ---
+    b'H', b'e', b'l', b'l', b'o', b' ', b'f', b'r', b'o', b'm', b' ', b'u', b's', b'e', b'r', b' ',
+    b'm', b'o', b'd', b'e', b'!', b'\n',
 ];
 
 // ---------------------------------------------------------------------------
@@ -100,11 +92,6 @@ fn build_user_aspace(
         .ok_or(MapError::FrameAllocationFailed)?;
     let code_base = user_base + USER_CODE_OFFSET;
     let stack_top = user_base + USER_STACK_OFFSET;
-
-    crate::println!(
-        "[user] PML4 base={:#x}, code={:#x}, stack_top={:#x}",
-        user_base, code_base, stack_top,
-    );
 
     // Map user code page (RX, user-accessible, one page).
     aspace.map(VirtAddr::new(code_base), code_phys, PageFlags::USER_RX)?;
@@ -141,33 +128,39 @@ pub fn create_user_task(id: TaskId) -> Option<Task> {
     }
 
     // 2. Allocate user stack frames.
-    let stack_bottom_phys = frame::alloc_pages(
-        crate::mm::page::pages_to_order(USER_STACK_PAGES)
-    )?;
+    let stack_bottom_phys = frame::alloc_pages(crate::mm::page::pages_to_order(USER_STACK_PAGES))?;
 
     // 3. Build the user address space.
-    let (aspace, user_code_base, user_stack_top) =
-        build_user_aspace(code_phys, stack_bottom_phys)
-            .expect("[user] failed to build user address space");
+    let (aspace, user_code_base, user_stack_top) = build_user_aspace(code_phys, stack_bottom_phys)
+        .expect("[user] failed to build user address space");
 
     // 4. Allocate a kernel stack for this task (used during syscall/interrupt).
     let kernel_stack_pages = super::context::TaskStack::STACK_PAGES;
-    let kstack_phys = frame::alloc_pages(
-        crate::mm::page::pages_to_order(kernel_stack_pages)
-    )?;
+    let kstack_phys = frame::alloc_pages(crate::mm::page::pages_to_order(kernel_stack_pages))?;
     let kstack_base = phys_to_virt(kstack_phys);
     let kstack_top = kstack_base.offset((kernel_stack_pages * PAGE_SIZE) as u64);
 
     // 5. Write the initial InterruptFrame at the top of the kernel stack.
     //    iretq will land in ring 3 at the user code base with the user RSP.
-    let frame_ptr = (kstack_top.as_u64()
-        - core::mem::size_of::<InterruptFrame>() as u64) as *mut InterruptFrame;
+    let frame_ptr = (kstack_top.as_u64() - core::mem::size_of::<InterruptFrame>() as u64)
+        as *mut InterruptFrame;
     unsafe {
         frame_ptr.write(InterruptFrame {
-            r15: 0, r14: 0, r13: 0, r12: 0,
-            r11: 0, r10: 0, r9: 0, r8: 0,
-            rbp: 0, rdi: 0, rsi: 0, rdx: 0,
-            rcx: 0, rbx: 0, rax: 0,
+            r15: 0,
+            r14: 0,
+            r13: 0,
+            r12: 0,
+            r11: 0,
+            r10: 0,
+            r9: 0,
+            r8: 0,
+            rbp: 0,
+            rdi: 0,
+            rsi: 0,
+            rdx: 0,
+            rcx: 0,
+            rbx: 0,
+            rax: 0,
             vector: 0xFD, // user task pseudo-vector
             error_code: 0,
             rip: user_code_base,

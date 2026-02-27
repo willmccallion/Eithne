@@ -87,7 +87,10 @@ pub fn init() {
         wrmsr(MSR_SFMASK, SFMASK);
     }
 
-    crate::println!("[syscall] SYSCALL/SYSRET enabled, LSTAR={:#x}", syscall_entry as *const () as usize);
+    crate::println!(
+        "[syscall] SYSCALL/SYSRET enabled, LSTAR={:#x}",
+        syscall_entry as *const () as usize
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -231,10 +234,10 @@ pub struct SyscallFrame {
     pub rax: u64, // syscall number / return value
     pub vector: u64,
     pub error_code: u64,
-    pub rip: u64,   // user RIP (for iretq compat)
+    pub rip: u64, // user RIP (for iretq compat)
     pub cs: u64,
     pub rflags: u64,
-    pub rsp: u64,   // user RSP
+    pub rsp: u64, // user RSP
     pub ss: u64,
 }
 
@@ -261,13 +264,13 @@ extern "C" fn syscall_dispatch(frame: &mut SyscallFrame) {
         Err(e) => {
             use crate::syscall::traits::SyscallError;
             let errno: u64 = match e {
-                SyscallError::InvalidSyscall  => 38,  // ENOSYS
-                SyscallError::InvalidArgument => 22,  // EINVAL
-                SyscallError::PermissionDenied => 1,  // EPERM
-                SyscallError::NotFound        => 2,   // ENOENT
-                SyscallError::IoError         => 5,   // EIO
-                SyscallError::NoMemory        => 12,  // ENOMEM
-                SyscallError::WouldBlock      => 11,  // EAGAIN
+                SyscallError::InvalidSyscall => 38,  // ENOSYS
+                SyscallError::InvalidArgument => 22, // EINVAL
+                SyscallError::PermissionDenied => 1, // EPERM
+                SyscallError::NotFound => 2,         // ENOENT
+                SyscallError::IoError => 5,          // EIO
+                SyscallError::NoMemory => 12,        // ENOMEM
+                SyscallError::WouldBlock => 11,      // EAGAIN
             };
             errno.wrapping_neg() // return negative errno
         }

@@ -74,4 +74,8 @@ impl ArchPlatform for Platform {
     fn set_syscall_stack(rsp_top: u64) {
         syscall::set_syscall_stack(rsp_top);
     }
+
+    fn enable_serial_rx() {
+        serial::enable_rx_interrupt();
+    }
 }

@@ -43,4 +43,9 @@ pub trait ArchPlatform {
     /// Must be called after every task switch so that a syscall from user mode
     /// lands on the correct kernel stack.
     fn set_syscall_stack(rsp_top: u64);
+
+    /// Enable serial port receive interrupts.
+    ///
+    /// Must be called after `init_interrupts()` so the PIC and IDT are ready.
+    fn enable_serial_rx();
 }

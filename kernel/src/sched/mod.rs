@@ -106,6 +106,30 @@ pub fn exit_current() -> ! {
     }
 }
 
+/// Mark the current task as Blocked and yield the CPU.
+///
+/// Used by blocking syscalls (e.g. `sys_read`) when there is no data
+/// available. The task will be woken by `wake_reader()`.
+pub fn block_current_and_yield() {
+    {
+        let sched = match SCHEDULER.get() {
+            Some(s) => s,
+            None => return,
+        };
+        sched.lock().block_current();
+    }
+    yield_cpu();
+}
+
+/// Wake the first blocked task. Called from the serial RX IRQ handler.
+pub fn wake_reader() {
+    let sched = match SCHEDULER.get() {
+        Some(s) => s,
+        None => return,
+    };
+    sched.lock().wake_blocked();
+}
+
 /// Cooperatively yield the CPU.
 ///
 /// Builds a synthetic `InterruptFrame` on the current stack, saves it as the

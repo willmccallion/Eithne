@@ -55,9 +55,15 @@ impl RoundRobinScheduler {
         0
     }
 
+    /// Pop the first `Ready` task from the queue, skipping any `Blocked` tasks.
+    fn pop_next_ready(&mut self) -> Option<Task> {
+        let pos = self.queue.iter().position(|t| t.state == TaskState::Ready)?;
+        self.queue.remove(pos)
+    }
+
     /// Cooperative switch: caller will write outgoing RSP via `old_rsp_ptr`.
     pub fn prepare_switch(&mut self) -> Option<PendingSwitch> {
-        let mut next = self.queue.pop_front()?;
+        let mut next = self.pop_next_ready()?;
         next.state = TaskState::Running;
         self.ticks_remaining = TIMESLICE;
         let new_rsp = next.saved_rsp;
@@ -89,9 +95,9 @@ impl RoundRobinScheduler {
     }
 
     /// Preemptive switch: outgoing RSP is supplied directly.
-    /// Returns (new_rsp, new_kstack_top, new_cr3) or None if queue is empty.
+    /// Returns (new_rsp, new_kstack_top, new_cr3) or None if no ready task.
     pub fn prepare_switch_preempt(&mut self, interrupted_rsp: u64) -> Option<(u64, u64, u64)> {
-        let mut next = self.queue.pop_front()?;
+        let mut next = self.pop_next_ready()?;
         next.state = TaskState::Running;
         self.ticks_remaining = TIMESLICE;
         let new_rsp = next.saved_rsp;
@@ -119,6 +125,29 @@ impl RoundRobinScheduler {
         if let Some(ref mut cur) = self.current {
             cur.state = TaskState::Dead;
         }
+    }
+
+    /// Mark the currently running task as Blocked.
+    ///
+    /// The task will be re-queued but skipped by `pop_next_ready()` until
+    /// `wake_blocked()` sets it back to `Ready`.
+    pub fn block_current(&mut self) {
+        if let Some(ref mut cur) = self.current {
+            cur.state = TaskState::Blocked;
+        }
+    }
+
+    /// Wake the first `Blocked` task in the queue by setting it to `Ready`.
+    ///
+    /// Returns `true` if a task was woken.
+    pub fn wake_blocked(&mut self) -> bool {
+        for task in self.queue.iter_mut() {
+            if task.state == TaskState::Blocked {
+                task.state = TaskState::Ready;
+                return true;
+            }
+        }
+        false
     }
 
     /// Decrement timeslice; return true when expired.

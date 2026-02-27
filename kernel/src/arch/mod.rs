@@ -73,3 +73,8 @@ pub fn init_syscalls() {
 pub fn set_syscall_stack(rsp_top: u64) {
     platform::Platform::set_syscall_stack(rsp_top);
 }
+
+/// Enable serial port receive interrupts.
+pub fn enable_serial_rx() {
+    platform::Platform::enable_serial_rx();
+}

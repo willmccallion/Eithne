@@ -59,4 +59,8 @@ impl ArchPlatform for Platform {
     fn set_syscall_stack(_rsp_top: u64) {
         // TODO: per-CPU kernel stack for trap entry
     }
+
+    fn enable_serial_rx() {
+        // TODO: UART RX interrupt enable
+    }
 }

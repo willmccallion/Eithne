@@ -115,12 +115,16 @@ fn kernel_main(boot_info: mm::boot_info::BootMemoryInfo, initramfs: Option<InitR
     // 5. Syscall interface.
     arch::init_syscalls();
 
-    // 6. Scheduler.
+    // 6. Serial input buffer + COM1 RX interrupts.
+    drivers::serial::init();
+    arch::enable_serial_rx();
+
+    // 8. Scheduler.
     sched::init();
 
     sched::spawn("idle", idle_task);
 
-    // 7. User-mode init process from ELF.
+    // 9. User-mode init process from ELF.
     #[cfg(target_arch = "x86_64")]
     if let Some(ref ramfs) = initramfs {
         // Convert the physical pool pointer to a virtual address through the

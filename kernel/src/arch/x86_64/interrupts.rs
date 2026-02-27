@@ -114,9 +114,10 @@ pub fn irq_handler(irq: u8, _frame: &InterruptFrame) {
             if ticks.is_multiple_of(100) {
                 crate::println!("[timer] {} ticks", ticks);
             }
-            // Preemptive switching from an IRQ handler requires saving the
-            // full interrupted register state, not the handler's own frame.
-            // Scheduling is cooperative (yield_cpu) for now.
+            // Signal the scheduler; the actual switch happens in check_resched
+            // at the isr_common exit path, after the full InterruptFrame is on
+            // the stack and the Rust handler has returned.
+            crate::sched::timer_tick();
         }
         1 => {
             let scancode = unsafe { inb(0x60) };

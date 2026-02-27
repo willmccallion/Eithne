@@ -62,7 +62,10 @@ impl<T> IrqSpinlock<T> {
                 core::hint::spin_loop();
             }
         }
-        IrqSpinlockGuard { lock: self, saved_rflags: saved }
+        IrqSpinlockGuard {
+            lock: self,
+            saved_rflags: saved,
+        }
     }
 }
 

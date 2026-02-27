@@ -175,8 +175,9 @@ macro_rules! isr_err {
     };
 }
 
-// Common handler: save registers, call Rust dispatcher, restore, iretq.
-// Uses Windows x64 ABI: first arg in RCX, 32-byte shadow space required.
+// Common handler: save registers, call Rust dispatcher, check for reschedule,
+// restore registers (or switch to new task), iretq.
+// Uses MS x64 ABI: first arg in RCX, 32-byte shadow space required.
 global_asm!(
     ".align 16",
     "isr_common:",
@@ -195,31 +196,34 @@ global_asm!(
     "push r13",
     "push r14",
     "push r15",
-    // First argument (RCX) = pointer to InterruptFrame
+    // RCX = &InterruptFrame (first MS ABI arg)
     "mov rcx, rsp",
-    // Allocate 32-byte shadow space (Windows x64 ABI requirement)
-    "sub rsp, 32",
+    // Call the Rust interrupt dispatcher
+    "sub rsp, 32",       // shadow space
     "call {dispatch}",
     "add rsp, 32",
-    "pop r15",
-    "pop r14",
-    "pop r13",
-    "pop r12",
-    "pop r11",
-    "pop r10",
-    "pop r9",
-    "pop r8",
-    "pop rbp",
-    "pop rdi",
-    "pop rsi",
-    "pop rdx",
-    "pop rcx",
-    "pop rbx",
-    "pop rax",
-    // Pop vector and error code
-    "add rsp, 16",
+    // --- Preemption check ---
+    // Call check_resched(interrupted_rsp=rsp) → returns new_rsp or 0
+    "mov rcx, rsp",      // arg: current RSP = top of InterruptFrame
+    "sub rsp, 32",
+    "call {check_resched}",
+    "add rsp, 32",
+    // RAX = new_rsp (0 = no switch)
+    "test rax, rax",
+    "jz .Lno_switch",
+    // Switch: load new task's RSP and resume it via sched_iretq_exit
+    "mov rsp, rax",
+    "jmp sched_iretq_exit",
+    ".Lno_switch:",
+    // No switch: restore current task's registers and iretq
+    "pop r15", "pop r14", "pop r13", "pop r12",
+    "pop r11", "pop r10", "pop r9",  "pop r8",
+    "pop rbp", "pop rdi", "pop rsi", "pop rdx",
+    "pop rcx", "pop rbx", "pop rax",
+    "add rsp, 16",       // skip vector + error_code
     "iretq",
-    dispatch = sym interrupt_dispatch,
+    dispatch       = sym interrupt_dispatch,
+    check_resched  = sym crate::sched::check_resched,
 );
 
 // Exception stubs (vectors 0-31)

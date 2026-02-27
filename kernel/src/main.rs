@@ -70,8 +70,7 @@ fn kernel_main(boot_info: mm::boot_info::BootMemoryInfo) {
 
 fn idle_task() -> ! {
     loop {
-        arch::halt_once(); // wait for next IRQ
-        sched::yield_cpu(); // then give other tasks a chance to run
+        arch::halt_once();
     }
 }
 
@@ -79,10 +78,8 @@ fn heartbeat_task() -> ! {
     let mut count = 0u64;
     loop {
         count += 1;
-        if count.is_multiple_of(10) {
+        if count.is_multiple_of(100_000) {
             println!("[heartbeat] still alive ({})", count);
         }
-        // Yield each iteration so idle_task also gets CPU time.
-        sched::yield_cpu();
     }
 }

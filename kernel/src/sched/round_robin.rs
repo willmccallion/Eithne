@@ -4,37 +4,26 @@ use alloc::collections::VecDeque;
 use super::process::{Task, TaskState};
 use super::traits::{Scheduler, TaskId};
 
-/// Simple preemptive round-robin scheduler.
-///
-/// Each task gets `TIMESLICE` timer ticks before being preempted.
 pub struct RoundRobinScheduler {
-    /// Tasks waiting to run.
     queue: VecDeque<Task>,
-    /// The task currently executing (None only before the first switch).
     current: Option<Task>,
-    /// Remaining ticks for the current task.
     ticks_remaining: usize,
-    /// Sequence counter for issuing `TaskId`s.
     next_id: u64,
-    /// Scratch RSP storage for the boot context (has no Task struct).
+    /// Scratch RSP for the boot context (has no Task struct).
     boot_rsp: u64,
 }
 
-/// Default time slice: 2 PIT ticks ≈ 110 ms at the default 18.2 Hz rate.
 const TIMESLICE: usize = 2;
 
-/// Values needed to call `switch_context` after the scheduler lock is dropped.
+/// Returned by `prepare_switch`; caller must drop the lock before using it.
 pub struct PendingSwitch {
-    /// Where `switch_context` writes the outgoing task's saved RSP.
+    /// Where to write the outgoing task's saved RSP.
     pub old_rsp_ptr: *mut u64,
-    /// The incoming task's saved RSP to switch to.
+    /// Incoming task's saved RSP (points at an InterruptFrame).
     pub new_rsp: u64,
 }
 
-// SAFETY: old_rsp_ptr either points into a Task in the scheduler queue
-// (stable because VecDeque heap memory doesn't move during a switch) or
-// into the scheduler's own `boot_rsp` field.  Either way it outlives the
-// switch_context call.
+// SAFETY: old_rsp_ptr points into a Task in the VecDeque heap or boot_rsp.
 unsafe impl Send for PendingSwitch {}
 
 impl RoundRobinScheduler {
@@ -54,38 +43,51 @@ impl RoundRobinScheduler {
         id
     }
 
-    /// Prepare a context switch to the next queued task.
-    ///
-    /// Updates all scheduler state and returns the RSP pair needed for
-    /// `switch_context`.  Returns `None` if the queue is empty.
-    ///
-    /// **The caller must drop the scheduler lock before calling
-    /// `switch_context` with the returned `PendingSwitch`.**
+    /// Cooperative switch: caller will write outgoing RSP via `old_rsp_ptr`.
     pub fn prepare_switch(&mut self) -> Option<PendingSwitch> {
         let mut next = self.queue.pop_front()?;
         next.state = TaskState::Running;
         self.ticks_remaining = TIMESLICE;
-        let new_rsp = next.saved_rsp; // read before next is moved into self.current
+        let new_rsp = next.saved_rsp;
 
         let old_rsp_ptr: *mut u64 = if let Some(mut prev) = self.current.take() {
             if prev.state == TaskState::Running {
                 prev.state = TaskState::Ready;
             }
             self.queue.push_back(prev);
-            // SAFETY: VecDeque stores its elements on the heap; push_back does
-            // not relocate existing entries, so this pointer stays valid until
-            // the task is removed from the queue.
-            let rsp_ref: &mut u64 = &mut self.queue.back_mut().unwrap().saved_rsp;
-            rsp_ref as *mut u64
+            &mut self.queue.back_mut().unwrap().saved_rsp as *mut u64
         } else {
             &mut self.boot_rsp as *mut u64
         };
 
         self.current = Some(next);
-        Some(PendingSwitch { old_rsp_ptr, new_rsp })
+        Some(PendingSwitch {
+            old_rsp_ptr,
+            new_rsp,
+        })
     }
 
-    /// Decrement the timeslice and return true if it has expired.
+    /// Preemptive switch: outgoing RSP is supplied directly.
+    /// Returns (new_rsp) or None if queue is empty.
+    pub fn prepare_switch_preempt(&mut self, interrupted_rsp: u64) -> Option<(u64, ())> {
+        let mut next = self.queue.pop_front()?;
+        next.state = TaskState::Running;
+        self.ticks_remaining = TIMESLICE;
+        let new_rsp = next.saved_rsp;
+
+        if let Some(mut prev) = self.current.take() {
+            if prev.state == TaskState::Running {
+                prev.state = TaskState::Ready;
+            }
+            prev.saved_rsp = interrupted_rsp;
+            self.queue.push_back(prev);
+        }
+
+        self.current = Some(next);
+        Some((new_rsp, ()))
+    }
+
+    /// Decrement timeslice; return true when expired.
     pub fn tick_check(&mut self) -> bool {
         if self.ticks_remaining > 0 {
             self.ticks_remaining -= 1;
@@ -98,7 +100,6 @@ impl Scheduler for RoundRobinScheduler {
     fn add_task(&mut self, task: Task) {
         self.queue.push_back(task);
     }
-
     fn pick_next(&mut self) {}
     fn yield_cpu(&mut self) {}
     fn tick(&mut self) {}

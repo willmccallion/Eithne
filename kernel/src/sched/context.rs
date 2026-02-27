@@ -1,162 +1,106 @@
 //! x86_64 kernel-thread context switching.
 //!
-//! Only callee-saved registers need to be preserved across a cooperative
-//! switch: RBX, RBP, R12-R15, RSP.  The instruction pointer is implicit —
-//! after `switch_context` returns on the new stack, execution continues at
-//! the next instruction in the new task's call chain.
+//! Every task's `saved_rsp` points at an `InterruptFrame` on its kernel stack.
+//! All tasks resume via a single path: load RSP, pop GPRs, `iretq`.
 //!
-//! The first time a newly-created task is switched to, its stack has a
-//! synthetic `SwitchFrame` placed by `TaskStack::new_for_fn` with RSP
-//! pointing just above it and the "return address" slot set to the task
-//! entry function.  When `switch_context` does its `ret`, it pops that
-//! address and jumps there.
+//! - **Preempted tasks**: `isr_common` built the frame; `check_resched` swaps
+//!   RSP before the `iretq` at the end of `isr_common`.
+//! - **New tasks**: `TaskStack::new_for_fn` builds a synthetic frame pointing
+//!   at the entry function with interrupts enabled.
+//! - **Cooperative yield**: `yield_now` builds a synthetic frame (resume label
+//!   = the instruction after `yield_now` returns), saves RSP, loads the next
+//!   task's RSP, and falls into `sched_iretq_exit`.
 
 use core::arch::global_asm;
 
+use crate::mm::page::PAGE_SIZE;
+use crate::mm::{VirtAddr, addr::virt_to_phys, frame};
+
 // ---------------------------------------------------------------------------
-// SwitchFrame — the register state saved on the kernel stack
+// InterruptFrame — must match the push order in isr_common (idt.rs)
 // ---------------------------------------------------------------------------
 
-/// Callee-saved registers pushed by `switch_context` before switching stacks.
-/// The layout must match the `switch_context` assembly exactly.
 #[repr(C)]
-pub struct SwitchFrame {
+pub struct InterruptFrame {
     pub r15: u64,
     pub r14: u64,
     pub r13: u64,
     pub r12: u64,
+    pub r11: u64,
+    pub r10: u64,
+    pub r9: u64,
+    pub r8: u64,
     pub rbp: u64,
+    pub rdi: u64,
+    pub rsi: u64,
+    pub rdx: u64,
+    pub rcx: u64,
     pub rbx: u64,
-    /// The "return address" — where execution resumes when this task is
-    /// next switched to and `switch_context` does its `ret`.
+    pub rax: u64,
+    pub vector: u64,
+    pub error_code: u64,
+    // CPU-pushed:
     pub rip: u64,
+    pub cs: u64,
+    pub rflags: u64,
+    pub rsp: u64,
+    pub ss: u64,
 }
 
-// ---------------------------------------------------------------------------
-// switch_context — assembly routine
-// ---------------------------------------------------------------------------
-
-// switch_context(old_rsp: *mut u64, new_rsp: u64)
-//
-// x86-64 System V ABI: first arg in RDI, second in RSI.
-// (The UEFI target uses the MS ABI, but this is a purely internal function
-//  declared `extern "C"` with System V semantics since we control both
-//  call sites — on x86-64 UEFI the MS ABI applies.  We therefore use
-//  RCX/RDX for the two arguments, matching the MS ABI.)
-//
-// Calling convention on the UEFI/MS-ABI target:
-//   RCX = old_rsp (pointer to where to save the old stack pointer)
-//   RDX = new_rsp (the stack pointer to switch to)
-//
-// What this does:
-//   1. Push callee-saved regs + the return address already on the stack.
-//   2. Save RSP into *old_rsp.
-//   3. Load RSP from new_rsp.
-//   4. Pop callee-saved regs.
-//   5. ret → jumps to the saved RIP of the new task.
-global_asm!(
-    ".align 16",
-    ".globl switch_context",
-    "switch_context:",
-    // Push callee-saved registers + implicit return address (already on stack
-    // from the `call` instruction) in the order matching SwitchFrame.
-    // Note: `call` pushed RIP before we got here, so RSP is already below it.
-    // We push the remaining callee-saved registers on top.
-    "push rbx",
-    "push rbp",
-    "push r12",
-    "push r13",
-    "push r14",
-    "push r15",
-    // *old_rsp = RSP
-    "mov [rcx], rsp",
-    // RSP = new_rsp
-    "mov rsp, rdx",
-    // Restore callee-saved registers of the new task
-    "pop r15",
-    "pop r14",
-    "pop r13",
-    "pop r12",
-    "pop rbp",
-    "pop rbx",
-    // Return to new task's saved RIP
-    "ret",
-);
-
-unsafe extern "C" {
-    /// Low-level context switch.
-    ///
-    /// Saves the current task's callee-saved registers + RSP to `*old_rsp`,
-    /// then loads the new task's stack pointer and restores its registers.
-    ///
-    /// # Safety
-    /// - `old_rsp` must point to writable memory that outlives the switch.
-    /// - `new_rsp` must be a valid kernel stack with a `SwitchFrame` at its top.
-    pub fn switch_context(old_rsp: *mut u64, new_rsp: u64);
-}
+/// RFLAGS for a new kernel thread: IF=1 + reserved bit 1.
+pub const RFLAGS_KERNEL_IF: u64 = 0x202;
 
 // ---------------------------------------------------------------------------
-// TaskStack — an allocated kernel stack
+// TaskStack
 // ---------------------------------------------------------------------------
 
-use crate::mm::page::PAGE_SIZE;
-use crate::mm::{VirtAddr, frame};
-
-/// A kernel stack allocated from the frame allocator.
 pub struct TaskStack {
-    /// Physical / virtual base (bottom) of the stack allocation.
     base: VirtAddr,
-    /// Number of pages allocated.
     pages: usize,
-    /// Initial RSP to pass to `switch_context`.
     pub initial_rsp: u64,
 }
 
 impl TaskStack {
-    /// Number of pages per kernel stack (64 KiB).
     pub const STACK_PAGES: usize = 16;
 
-    /// Allocate a kernel stack and set it up so that switching to it will
-    /// call `entry_fn` with no arguments.
     pub fn new_for_fn(entry_fn: fn() -> !) -> Option<Self> {
+        // KERNEL_CS is only defined for x86_64; on other archs the scheduler
+        // stubs don't use this path.
+        #[cfg(target_arch = "x86_64")]
+        let kernel_cs: u16 = 0x08; // matches gdt::KERNEL_CS
         use crate::mm::page::pages_to_order;
-
         let pages = Self::STACK_PAGES;
-        let order = pages_to_order(pages);
-        let phys = frame::alloc_pages(order)?;
-
-        // Identity-mapped: virt == phys.
+        let phys = frame::alloc_pages(pages_to_order(pages))?;
         let base = VirtAddr::new(phys.as_u64());
-        // Stack top (grows down).
-        let stack_top = base.offset((pages * PAGE_SIZE) as u64);
-
-        // Build a synthetic SwitchFrame at the top of the stack.
-        // We lay it out manually: push rip last (highest address when
-        // viewed as pushed by `call`), then rbx, rbp, r12-r15.
-        //
-        // Memory layout at stack_top (growing downward):
-        //   [stack_top - 8 ] = entry_fn   ← this is what `ret` will pop as RIP
-        //   [stack_top - 16] = rbx = 0
-        //   [stack_top - 24] = rbp = 0
-        //   [stack_top - 32] = r12 = 0
-        //   [stack_top - 40] = r13 = 0
-        //   [stack_top - 48] = r14 = 0
-        //   [stack_top - 56] = r15 = 0   ← initial RSP points here
-
-        let frame_size = core::mem::size_of::<SwitchFrame>();
-        let frame_ptr = (stack_top.as_u64() - frame_size as u64) as *mut SwitchFrame;
+        let top = base.offset((pages * PAGE_SIZE) as u64);
+        let frame_ptr =
+            (top.as_u64() - core::mem::size_of::<InterruptFrame>() as u64) as *mut InterruptFrame;
         unsafe {
-            (*frame_ptr) = SwitchFrame {
-                rip: entry_fn as usize as u64,
-                rbx: 0,
-                rbp: 0,
-                r12: 0,
-                r13: 0,
-                r14: 0,
+            frame_ptr.write(InterruptFrame {
                 r15: 0,
-            };
+                r14: 0,
+                r13: 0,
+                r12: 0,
+                r11: 0,
+                r10: 0,
+                r9: 0,
+                r8: 0,
+                rbp: 0,
+                rdi: 0,
+                rsi: 0,
+                rdx: 0,
+                rcx: 0,
+                rbx: 0,
+                rax: 0,
+                vector: 0xFF,
+                error_code: 0,
+                rip: entry_fn as usize as u64,
+                cs: kernel_cs as u64,
+                rflags: RFLAGS_KERNEL_IF,
+                rsp: top.as_u64(),
+                ss: 0,
+            });
         }
-
         Some(Self {
             base,
             pages,
@@ -168,8 +112,91 @@ impl TaskStack {
 impl Drop for TaskStack {
     fn drop(&mut self) {
         use crate::mm::page::pages_to_order;
-        let order = pages_to_order(self.pages);
-        let phys = crate::mm::addr::virt_to_phys(self.base);
-        frame::dealloc_pages(phys, order);
+        frame::dealloc_pages(virt_to_phys(self.base), pages_to_order(self.pages));
     }
+}
+
+// ---------------------------------------------------------------------------
+// sched_iretq_exit — single resume path: pop InterruptFrame + iretq
+// ---------------------------------------------------------------------------
+
+global_asm!(
+    ".align 16",
+    ".globl sched_iretq_exit",
+    "sched_iretq_exit:",
+    "pop r15",
+    "pop r14",
+    "pop r13",
+    "pop r12",
+    "pop r11",
+    "pop r10",
+    "pop r9",
+    "pop r8",
+    "pop rbp",
+    "pop rdi",
+    "pop rsi",
+    "pop rdx",
+    "pop rcx",
+    "pop rbx",
+    "pop rax",
+    "add rsp, 16", // skip vector + error_code
+    "iretq",
+);
+
+// ---------------------------------------------------------------------------
+// yield_now(old_rsp_ptr: *mut u64, new_rsp: u64)  [MS ABI: rcx, rdx]
+// ---------------------------------------------------------------------------
+//
+// Builds a synthetic InterruptFrame on the current kernel stack so this task
+// can be resumed via sched_iretq_exit.  The saved RIP points at .Lresume,
+// which executes `ret` back to yield_cpu's caller.
+//
+// Uses R10/R11 as scratch (volatile in MS ABI, not used for arg passing here).
+
+global_asm!(
+    ".align 16",
+    ".globl yield_now",
+    "yield_now:",
+    // Stash args in volatile regs not used for passing (r10, r11)
+    "mov r10, rcx", // r10 = old_rsp_ptr
+    "mov r11, rdx", // r11 = new_rsp
+    // Build iretq frame (high address → low address on stack):
+    "xor eax, eax",
+    "push rax",           // ss = 0
+    "lea rax, [rsp + 8]", // rsp value before this frame (8 = size of ss slot)
+    "push rax",           // rsp
+    "pushfq",             // rflags (captures current IF state)
+    "push 0x8",           // cs = KERNEL_CS
+    "lea rax, [rip + .Lyield_resume]",
+    "push rax",  // rip = resume label
+    "push 0",    // error_code
+    "push 0xFF", // vector
+    // Push all GPRs (rax clobbered above — saved value is 0xFF from last push; fine)
+    "push rax",
+    "push rbx",
+    "push rcx",
+    "push rdx",
+    "push rsi",
+    "push rdi",
+    "push rbp",
+    "push r8",
+    "push r9",
+    "push r10",
+    "push r11",
+    "push r12",
+    "push r13",
+    "push r14",
+    "push r15",
+    // RSP now points at the InterruptFrame. Save into *old_rsp_ptr.
+    "mov [r10], rsp",
+    // Switch to new task and resume via iretq.
+    "mov rsp, r11",
+    "jmp sched_iretq_exit",
+    // Resume label: this task is scheduled back in. iretq lands here.
+    ".Lyield_resume:",
+    "ret", // return to yield_cpu's caller
+);
+
+unsafe extern "C" {
+    pub fn yield_now(old_rsp_ptr: *mut u64, new_rsp: u64);
 }

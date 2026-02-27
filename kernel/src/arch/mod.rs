@@ -1,7 +1,7 @@
 pub mod traits;
 
 #[cfg(target_arch = "x86_64")]
-mod x86_64;
+pub mod x86_64;
 #[cfg(target_arch = "x86_64")]
 use x86_64 as platform;
 
@@ -62,4 +62,14 @@ pub fn halt_once() {
 /// Set up the higher-half direct mapping of all physical memory.
 pub fn init_higher_half(max_phys: u64) {
     platform::Platform::init_higher_half(max_phys);
+}
+
+/// Initialize the fast system call interface.
+pub fn init_syscalls() {
+    platform::Platform::init_syscalls();
+}
+
+/// Update the kernel RSP used on syscall/exception entry for the current task.
+pub fn set_syscall_stack(rsp_top: u64) {
+    platform::Platform::set_syscall_stack(rsp_top);
 }

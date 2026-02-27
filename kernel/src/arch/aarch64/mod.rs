@@ -51,4 +51,12 @@ impl ArchPlatform for Platform {
     fn init_higher_half(_max_phys: u64) {
         // TODO: AArch64 TTBR1 direct-map setup
     }
+
+    fn init_syscalls() {
+        // TODO: AArch64 SVC handler setup
+    }
+
+    fn set_syscall_stack(_rsp_top: u64) {
+        // TODO: per-CPU kernel stack for exception entry
+    }
 }

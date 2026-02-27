@@ -3,6 +3,7 @@ pub mod process;
 pub mod round_robin;
 pub mod thread;
 pub mod traits;
+pub mod user;
 
 pub use traits::{Scheduler, TaskId};
 
@@ -42,6 +43,18 @@ pub fn spawn(name: &'static str, entry_fn: fn() -> !) -> Option<TaskId> {
     Some(id)
 }
 
+/// Spawn the built-in user-mode init process (ring 3).
+#[cfg(target_arch = "x86_64")]
+pub fn spawn_user() -> Option<TaskId> {
+    let sched = SCHEDULER.get()?;
+    let mut guard = sched.lock();
+    let id = guard.alloc_id();
+    let task = user::create_user_task(id)?;
+    crate::println!("[sched] spawned user task {:?} '{}'", id, task.name);
+    guard.add_task(task);
+    Some(id)
+}
+
 /// Called from the timer IRQ handler each tick.
 pub fn timer_tick() {
     let sched = match SCHEDULER.get() {
@@ -70,8 +83,26 @@ pub extern "C" fn check_resched(interrupted_rsp: u64) -> u64 {
         None => return 0,
     };
     match sched.lock().prepare_switch_preempt(interrupted_rsp) {
-        Some((new_rsp, _)) => new_rsp,
+        Some((new_rsp, kstack_top, cr3)) => {
+            activate_task(kstack_top, cr3);
+            new_rsp
+        }
         None => 0,
+    }
+}
+
+/// Mark the current task as Dead and yield.
+///
+/// Called from `sys_exit`.  The scheduler will never run the task again.
+/// This function does not return.
+pub fn exit_current() -> ! {
+    {
+        let sched = SCHEDULER.get().expect("scheduler not init");
+        sched.lock().kill_current();
+    }
+    yield_cpu();
+    loop {
+        crate::arch::halt_once();
     }
 }
 
@@ -89,9 +120,29 @@ pub fn yield_cpu() {
     };
 
     if let Some(p) = pending {
-        // yield_now saves our InterruptFrame into *old_rsp_ptr, loads new_rsp,
-        // and resumes the next task.  When we are scheduled back, execution
-        // returns from yield_now (at the .Lyield_resume ret instruction).
+        activate_task(p.new_kstack_top, p.new_cr3);
         unsafe { yield_now(p.old_rsp_ptr, p.new_rsp) };
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+/// Activate the incoming task: switch address space and update SYSCALL_KSTACK_TOP.
+///
+/// Must be called with the scheduler lock dropped (address space activation
+/// touches CR3; SYSCALL_KSTACK_TOP write is a plain store).
+#[inline]
+fn activate_task(kstack_top: u64, cr3: u64) {
+    // Update SYSCALL_KSTACK_TOP so that the next SYSCALL instruction from
+    // user mode lands on this task's kernel stack.
+    crate::arch::set_syscall_stack(kstack_top);
+
+    // Switch page tables if this task has its own address space.
+    if cr3 != 0 {
+        unsafe {
+            core::arch::asm!("mov cr3, {}", in(reg) cr3, options(nomem, nostack));
+        }
     }
 }

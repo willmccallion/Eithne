@@ -58,6 +58,10 @@ pub struct TaskStack {
     base: VirtAddr,
     pages: usize,
     pub initial_rsp: u64,
+    /// Top of the kernel stack (physical frame base + size).
+    pub kstack_top: u64,
+    /// Whether this TaskStack owns the frames (should free on drop).
+    owns_frames: bool,
 }
 
 impl TaskStack {
@@ -71,7 +75,7 @@ impl TaskStack {
         use crate::mm::page::pages_to_order;
         let pages = Self::STACK_PAGES;
         let phys = frame::alloc_pages(pages_to_order(pages))?;
-        let base = VirtAddr::new(phys.as_u64());
+        let base = VirtAddr::new(crate::mm::addr::phys_to_virt(phys).as_u64());
         let top = base.offset((pages * PAGE_SIZE) as u64);
         let frame_ptr =
             (top.as_u64() - core::mem::size_of::<InterruptFrame>() as u64) as *mut InterruptFrame;
@@ -105,14 +109,34 @@ impl TaskStack {
             base,
             pages,
             initial_rsp: frame_ptr as u64,
+            kstack_top: top.as_u64(),
+            owns_frames: true,
         })
+    }
+
+    /// Build a TaskStack wrapper around an already-allocated kernel stack.
+    ///
+    /// Used by user-mode task creation, which allocates and initialises the
+    /// stack itself.  `from_raw` does NOT write an InterruptFrame.
+    pub fn from_raw(base: VirtAddr, pages: usize) -> Self {
+        let top = base.offset((pages * PAGE_SIZE) as u64);
+        Self {
+            base,
+            pages,
+            initial_rsp: 0, // not used for user tasks
+            kstack_top: top.as_u64(),
+            owns_frames: true,
+        }
     }
 }
 
 impl Drop for TaskStack {
     fn drop(&mut self) {
-        use crate::mm::page::pages_to_order;
-        frame::dealloc_pages(virt_to_phys(self.base), pages_to_order(self.pages));
+        if self.owns_frames {
+            use crate::mm::page::pages_to_order;
+            let phys = virt_to_phys(self.base);
+            frame::dealloc_pages(phys, pages_to_order(self.pages));
+        }
     }
 }
 

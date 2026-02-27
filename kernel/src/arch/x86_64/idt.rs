@@ -491,17 +491,7 @@ extern "C" fn interrupt_dispatch(frame: &InterruptFrame) {
         v if v == InvalidOpcode as u8 => exception_halt("Invalid Opcode (#UD)", frame),
         v if v == DeviceNotAvail as u8 => exception_halt("Device Not Available (#NM)", frame),
         v if v == DoubleFault as u8 => {
-            crate::println!("[FATAL] Double Fault (#DF)");
-            crate::println!("  error_code={:#x} RIP={:#x}", frame.error_code, frame.rip);
-            crate::println!(
-                "  RSP={:#x} CS={:#x} SS={:#x}",
-                frame.rsp,
-                frame.cs,
-                frame.ss
-            );
-            loop {
-                core::hint::spin_loop();
-            }
+            panic_dump("Double Fault (#DF)", frame);
         }
         v if v == InvalidTss as u8 => exception_halt("Invalid TSS (#TS)", frame),
         v if v == SegmentNotPresent as u8 => exception_halt("Segment Not Present (#NP)", frame),
@@ -510,35 +500,12 @@ extern "C" fn interrupt_dispatch(frame: &InterruptFrame) {
             exception_halt("General Protection Fault (#GP)", frame)
         }
         v if v == PageFault as u8 => {
-            let cr2: u64;
-            unsafe {
-                core::arch::asm!("mov {}, cr2", out(reg) cr2, options(nomem, nostack));
-            }
-            crate::println!(
-                "[FAULT] Page Fault (#PF) at {:#x}, error={:#b}, RIP={:#x}",
-                cr2,
-                frame.error_code,
-                frame.rip,
-            );
-            crate::println!(
-                "  P={} W={} U={} RSVD={} I/D={}",
-                frame.error_code & 1,
-                (frame.error_code >> 1) & 1,
-                (frame.error_code >> 2) & 1,
-                (frame.error_code >> 3) & 1,
-                (frame.error_code >> 4) & 1,
-            );
-            loop {
-                core::hint::spin_loop();
-            }
+            panic_dump("Page Fault (#PF)", frame);
         }
         v if v == X87Fp as u8 => exception_halt("x87 FP Exception (#MF)", frame),
         v if v == AlignmentCheck as u8 => exception_halt("Alignment Check (#AC)", frame),
         v if v == MachineCheck as u8 => {
-            crate::println!("[FATAL] Machine Check (#MC)");
-            loop {
-                core::hint::spin_loop();
-            }
+            panic_dump("Machine Check (#MC)", frame);
         }
         v if v == SimdFp as u8 => exception_halt("SIMD FP Exception (#XM)", frame),
 
@@ -554,24 +521,59 @@ extern "C" fn interrupt_dispatch(frame: &InterruptFrame) {
 }
 
 fn exception_halt(name: &str, frame: &InterruptFrame) -> ! {
-    crate::println!("[EXCEPTION] {} (vector {})", name, frame.vector);
-    crate::println!("  error_code={:#x} RIP={:#x}", frame.error_code, frame.rip);
-    crate::println!(
-        "  CS={:#x} SS={:#x} RSP={:#x} RBP={:#x}",
-        frame.cs,
-        frame.ss,
-        frame.rsp,
-        frame.rbp
-    );
-    crate::println!("  RFLAGS={:#x}", frame.rflags);
-    crate::println!(
-        "  RAX={:#x} RBX={:#x} RCX={:#x} RDX={:#x}",
-        frame.rax,
-        frame.rbx,
-        frame.rcx,
-        frame.rdx,
-    );
+    panic_dump(name, frame);
+}
+
+/// Print a full register dump and halt.  This is the kernel's equivalent of a
+/// Linux kernel panic / oops — it gives you enough state to diagnose the fault
+/// instead of silently triple-faulting.
+fn panic_dump(name: &str, frame: &InterruptFrame) -> ! {
+    // Read CR2 and CR3 while we still can.
+    let cr2: u64;
+    let cr3: u64;
+    unsafe {
+        core::arch::asm!("mov {}, cr2", out(reg) cr2, options(nomem, nostack));
+        core::arch::asm!("mov {}, cr3", out(reg) cr3, options(nomem, nostack));
+    }
+
+    crate::println!();
+    crate::println!("========================================");
+    crate::println!("  KERNEL PANIC: {}", name);
+    crate::println!("========================================");
+    crate::println!("  vector={:#x}  error_code={:#x}", frame.vector, frame.error_code);
+    crate::println!();
+    crate::println!("  RIP={:#018x}  RSP={:#018x}", frame.rip, frame.rsp);
+    crate::println!("  CS={:#06x}  SS={:#06x}  RFLAGS={:#018x}", frame.cs, frame.ss, frame.rflags);
+    crate::println!("  CR2={:#018x}  CR3={:#018x}", cr2, cr3);
+    crate::println!();
+    crate::println!("  RAX={:#018x}  RBX={:#018x}", frame.rax, frame.rbx);
+    crate::println!("  RCX={:#018x}  RDX={:#018x}", frame.rcx, frame.rdx);
+    crate::println!("  RSI={:#018x}  RDI={:#018x}", frame.rsi, frame.rdi);
+    crate::println!("  RBP={:#018x}  R8 ={:#018x}", frame.rbp, frame.r8);
+    crate::println!("  R9 ={:#018x}  R10={:#018x}", frame.r9, frame.r10);
+    crate::println!("  R11={:#018x}  R12={:#018x}", frame.r11, frame.r12);
+    crate::println!("  R13={:#018x}  R14={:#018x}", frame.r13, frame.r14);
+    crate::println!("  R15={:#018x}", frame.r15);
+
+    // Decode page-fault error code bits.
+    if frame.vector == Vector::PageFault as u64 {
+        let e = frame.error_code;
+        crate::println!();
+        crate::println!(
+            "  #PF flags: P={} W={} U={} RSVD={} I/D={}",
+            e & 1,
+            (e >> 1) & 1,
+            (e >> 2) & 1,
+            (e >> 3) & 1,
+            (e >> 4) & 1,
+        );
+    }
+
+    crate::println!();
+    crate::println!("  --- system halted ---");
+    crate::println!();
+
     loop {
-        core::hint::spin_loop();
+        unsafe { core::arch::asm!("cli; hlt", options(nomem, nostack)) };
     }
 }

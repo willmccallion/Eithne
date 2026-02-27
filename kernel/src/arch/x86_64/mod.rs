@@ -6,6 +6,9 @@ pub mod interrupts;
 pub mod io;
 pub mod paging;
 pub mod serial;
+pub mod syscall;
+
+pub use paging::KernelAddressSpace;
 
 use super::traits::ArchPlatform;
 
@@ -62,5 +65,13 @@ impl ArchPlatform for Platform {
 
     fn init_higher_half(max_phys: u64) {
         paging::init_higher_half(max_phys);
+    }
+
+    fn init_syscalls() {
+        syscall::init();
+    }
+
+    fn set_syscall_stack(rsp_top: u64) {
+        syscall::set_syscall_stack(rsp_top);
     }
 }

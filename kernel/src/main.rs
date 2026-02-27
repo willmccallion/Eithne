@@ -52,10 +52,17 @@ fn kernel_main(boot_info: mm::boot_info::BootMemoryInfo) {
     // 4. Page table smoke test.
     arch::test_paging();
 
-    // 5. Scheduler.
+    // 5. Syscall interface.
+    arch::init_syscalls();
+
+    // 6. Scheduler.
     sched::init();
 
     sched::spawn("idle", idle_task);
+
+    // 7. User-mode init process.
+    #[cfg(target_arch = "x86_64")]
+    sched::spawn_user();
 
     println!("[eithne] initialization complete — entering scheduler loop.");
 

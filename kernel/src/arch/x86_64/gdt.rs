@@ -166,8 +166,11 @@ pub fn init() {
     let ist2_bottom = mm::frame::alloc_pages(order).expect("failed to allocate IST2 stack");
 
     // IST entries point to the TOP of the stack (grows downward).
-    let ist1_top = ist1_bottom.as_u64() + (IST_STACK_PAGES * mm::page::PAGE_SIZE) as u64;
-    let ist2_top = ist2_bottom.as_u64() + (IST_STACK_PAGES * mm::page::PAGE_SIZE) as u64;
+    // Use virtual addresses so they remain valid after CR3 switches.
+    let ist1_top = mm::addr::phys_to_virt(ist1_bottom).as_u64()
+        + (IST_STACK_PAGES * mm::page::PAGE_SIZE) as u64;
+    let ist2_top = mm::addr::phys_to_virt(ist2_bottom).as_u64()
+        + (IST_STACK_PAGES * mm::page::PAGE_SIZE) as u64;
 
     // Populate TSS.
     let tss = unsafe { &mut *TSS_STORAGE.tss.get() };
@@ -210,6 +213,16 @@ pub fn init() {
         ist1_top,
         ist2_top
     );
+}
+
+/// Update TSS.RSP0 — the kernel stack used when the CPU takes an interrupt
+/// or exception while in ring 3.
+///
+/// Must be called on every task switch so that interrupts from user mode
+/// land on the correct kernel stack.
+pub fn set_rsp0(rsp0: u64) {
+    let tss = unsafe { &mut *TSS_STORAGE.tss.get() };
+    tss.rsp[0] = rsp0;
 }
 
 /// Reload CS via far return and set DS/SS/ES to kernel data selector.

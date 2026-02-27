@@ -34,4 +34,13 @@ pub trait ArchPlatform {
     /// Execute a single halt/wait-for-interrupt instruction and return after
     /// the next interrupt.  Used by the idle task.
     fn halt_once();
+
+    /// Initialize the fast system call interface (SYSCALL/SYSRET on x86_64).
+    fn init_syscalls();
+
+    /// Update the kernel stack pointer used on syscall entry for the current CPU.
+    ///
+    /// Must be called after every task switch so that a syscall from user mode
+    /// lands on the correct kernel stack.
+    fn set_syscall_stack(rsp_top: u64);
 }

@@ -180,6 +180,34 @@ impl KernelAddressSpace {
         Some(Self { cr3 })
     }
 
+    /// Create a new address space pre-populated with **all** kernel mappings
+    /// copied from the currently active PML4.
+    ///
+    /// This includes both the identity-map entries in the lower half (where
+    /// kernel code/data live) and the higher-half direct-map entries (indices
+    /// 256-511).  Both are required because the kernel executes at identity-
+    /// mapped addresses and accesses physical memory via the direct map.
+    ///
+    /// User-space pages are added afterwards via `map()` into the lower-half
+    /// slots that are not occupied by the kernel's identity map.
+    pub fn new_with_kernel_mappings() -> Result<Self, crate::mm::traits::MapError> {
+        let new = Self::new().ok_or(crate::mm::traits::MapError::FrameAllocationFailed)?;
+
+        let cur_cr3: u64;
+        unsafe { asm!("mov {}, cr3", out(reg) cur_cr3, options(nomem, nostack)) };
+        let cur_pml4 = unsafe {
+            &*(phys_to_virt(PhysAddr::new(cur_cr3 & flags::ADDR_MASK)).as_ptr::<PageTable>())
+        };
+        let new_pml4 = unsafe {
+            &mut *(phys_to_virt(new.cr3).as_mut_ptr::<PageTable>())
+        };
+        for i in 0..512 {
+            new_pml4.entries[i] = cur_pml4.entries[i];
+        }
+
+        Ok(new)
+    }
+
     /// Build an address space from the currently active CR3 value.
     ///
     /// Used to wrap UEFI's existing page tables so we can extend them before

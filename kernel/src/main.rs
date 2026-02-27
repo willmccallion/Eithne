@@ -50,10 +50,7 @@ fn kernel_main(boot_info: mm::boot_info::BootMemoryInfo) {
     // 4. Scheduler.
     sched::init();
 
-    // Spawn a couple of demo kernel threads so the scheduler has something
-    // to switch between.
     sched::spawn("idle", idle_task);
-    sched::spawn("heartbeat", heartbeat_task);
 
     println!("[eithne] initialization complete — entering scheduler loop.");
 
@@ -64,22 +61,8 @@ fn kernel_main(boot_info: mm::boot_info::BootMemoryInfo) {
     arch::halt();
 }
 
-// ---------------------------------------------------------------------------
-// Demo kernel threads
-// ---------------------------------------------------------------------------
-
 fn idle_task() -> ! {
     loop {
         arch::halt_once();
-    }
-}
-
-fn heartbeat_task() -> ! {
-    let mut count = 0u64;
-    loop {
-        count += 1;
-        if count.is_multiple_of(100_000) {
-            println!("[heartbeat] still alive ({})", count);
-        }
     }
 }

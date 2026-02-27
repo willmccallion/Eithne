@@ -43,13 +43,13 @@ pub fn spawn(name: &'static str, entry_fn: fn() -> !) -> Option<TaskId> {
     Some(id)
 }
 
-/// Spawn the built-in user-mode init process (ring 3).
+/// Spawn a user-mode process from an ELF binary.
 #[cfg(target_arch = "x86_64")]
-pub fn spawn_user() -> Option<TaskId> {
+pub fn spawn_user_from_elf(elf_data: &[u8]) -> Option<TaskId> {
     let sched = SCHEDULER.get()?;
     let mut guard = sched.lock();
     let id = guard.alloc_id();
-    let task = user::create_user_task(id)?;
+    let task = user::create_user_task_from_elf(id, "user_init", elf_data)?;
     crate::println!("[sched] spawned user task {:?} '{}'", id, task.name);
     guard.add_task(task);
     Some(id)

@@ -34,10 +34,23 @@ if [ ! -f "$EFI_BINARY" ]; then
     exit 1
 fi
 
+# Build user-mode init program (x86_64 only)
+if [ "$TARGET" = "x86_64" ]; then
+    echo "==> Building user/init..."
+    as --64 -o target/init.o user/init.S
+    ld -T user/link.ld -nostdlib -o target/init target/init.o
+fi
+
 # Create ESP (EFI System Partition) directory structure
 ESP_DIR="target/esp"
 mkdir -p "$ESP_DIR/EFI/BOOT"
+mkdir -p "$ESP_DIR/EFI/eithne"
 cp "$EFI_BINARY" "$ESP_DIR/EFI/BOOT/$BOOT_FILE"
+
+# Copy user-mode init to ESP
+if [ "$TARGET" = "x86_64" ] && [ -f "target/init" ]; then
+    cp target/init "$ESP_DIR/EFI/eithne/init"
+fi
 
 echo "==> Launching QEMU ($TARGET)..."
 echo "    Press Ctrl-B X to exit QEMU"

@@ -47,3 +47,14 @@ pub fn enable_interrupts() {
 pub fn disable_interrupts() {
     platform::Platform::disable_interrupts();
 }
+
+/// Run the page-table smoke test for the current architecture.
+pub fn test_paging() {
+    platform::Platform::test_paging();
+}
+
+/// Execute a single `hlt`-equivalent instruction and return after the next
+/// interrupt.  Used by the idle task to avoid busy-spinning.
+pub fn halt_once() {
+    platform::Platform::halt_once();
+}

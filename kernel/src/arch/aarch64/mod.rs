@@ -39,4 +39,12 @@ impl ArchPlatform for Platform {
     fn arch_name() -> &'static str {
         "aarch64"
     }
+
+    fn test_paging() {
+        // TODO: AArch64 TTBR0/TTBR1 page table smoke test
+    }
+
+    fn halt_once() {
+        unsafe { core::arch::asm!("wfe") }
+    }
 }

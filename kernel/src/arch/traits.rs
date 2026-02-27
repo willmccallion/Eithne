@@ -23,4 +23,11 @@ pub trait ArchPlatform {
 
     /// Return the architecture name (e.g. "x86_64").
     fn arch_name() -> &'static str;
+
+    /// Run the architecture's page-table smoke test.
+    fn test_paging();
+
+    /// Execute a single halt/wait-for-interrupt instruction and return after
+    /// the next interrupt.  Used by the idle task.
+    fn halt_once();
 }

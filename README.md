@@ -11,6 +11,8 @@ A minimal operating system kernel written in Rust, targeting x86_64 via UEFI.
 - **IDT** — 256-entry interrupt descriptor table with assembly stubs for all CPU exceptions (with diagnostics: register dump, CR2 for page faults, error code decoding) and PIC IRQs
 - **8259 PIC** — remapped to vectors 32-47, PIT timer interrupt running at default ~18.2 Hz
 - **Synchronization** — spinlock and once-cell primitives
+- **Virtual memory** — x86_64 4-level page tables (PML4→PDPT→PD→PT), `map`/`unmap`/`translate`, `invlpg`, huge page walk, `KernelAddressSpace` implementing `PageMapper` + `AddressSpace`
+- **Kernel threads** — cooperative + preemptive round-robin scheduler; kernel stacks allocated from the buddy allocator; assembly `switch_context` saves/restores callee-saved registers; timer IRQ drives preemption (10-tick timeslice); `sched::spawn` / `sched::yield_cpu`
 
 ## Architecture
 
@@ -23,7 +25,7 @@ kernel/src/
     x86_64/        GDT, IDT, PIC, serial, port I/O
   mm/              Frame allocator, slab heap, address types
   sync/            Spinlock, Once<T>
-  sched/           (stub) Scheduler
+  sched/           Round-robin scheduler, kernel threads, context switch
   drivers/         (stub) Hardware drivers
   fs/              (stub) Filesystem
   syscall/         (stub) System call interface
@@ -65,8 +67,13 @@ Press `Ctrl-B X` to exit QEMU.
 [pic] remapping to vectors 32-47
 [pic] IRQ0 (timer) unmasked
 [arch] enabling interrupts
-[eithne] initialization complete — halting.
+[paging] page table smoke test passed
+[sched] round-robin scheduler initialized
+[sched] spawned task TaskId(1) 'idle'
+[sched] spawned task TaskId(2) 'heartbeat'
+[eithne] initialization complete — entering scheduler loop.
 [timer] 100 ticks
+[heartbeat] still alive (500)
 [timer] 200 ticks
 ...
 ```

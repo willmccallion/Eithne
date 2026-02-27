@@ -39,4 +39,12 @@ impl ArchPlatform for Platform {
     fn arch_name() -> &'static str {
         "riscv64"
     }
+
+    fn test_paging() {
+        // TODO: RISC-V Sv48 page table smoke test
+    }
+
+    fn halt_once() {
+        unsafe { core::arch::asm!("wfi") }
+    }
 }

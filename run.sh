@@ -2,7 +2,6 @@
 set -euo pipefail
 
 TARGET="${1:-x86_64}"
-PROFILE="${2:-debug}"
 
 case "$TARGET" in
     x86_64)
@@ -20,19 +19,15 @@ case "$TARGET" in
         QEMU_EXTRA="-machine virt -cpu cortex-a72"
         ;;
     *)
-        echo "Usage: $0 [x86_64|aarch64] [debug|release]"
+        echo "Usage: $0 [x86_64|aarch64]"
         exit 1
         ;;
 esac
 
-echo "==> Building for $UEFI_TARGET ($PROFILE)..."
-if [ "$PROFILE" = "release" ]; then
-    cargo build --target "$UEFI_TARGET" --release
-else
-    cargo build --target "$UEFI_TARGET"
-fi
+echo "==> Building for $UEFI_TARGET (release)..."
+cargo build --target "$UEFI_TARGET" --release
 
-EFI_BINARY="target/$UEFI_TARGET/$PROFILE/eithne.efi"
+EFI_BINARY="target/$UEFI_TARGET/release/eithne.efi"
 
 if [ ! -f "$EFI_BINARY" ]; then
     echo "ERROR: $EFI_BINARY not found"

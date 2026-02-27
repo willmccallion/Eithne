@@ -51,4 +51,12 @@ impl ArchPlatform for Platform {
     fn arch_name() -> &'static str {
         "x86_64"
     }
+
+    fn test_paging() {
+        paging::test_paging();
+    }
+
+    fn halt_once() {
+        cpu::halt_once();
+    }
 }

@@ -27,6 +27,10 @@ pub trait ArchPlatform {
     /// Run the architecture's page-table smoke test.
     fn test_paging();
 
+    /// Set up the higher-half direct mapping of all physical memory.
+    /// `max_phys` is the highest physical address to map (exclusive, rounded up).
+    fn init_higher_half(max_phys: u64);
+
     /// Execute a single halt/wait-for-interrupt instruction and return after
     /// the next interrupt.  Used by the idle task.
     fn halt_once();

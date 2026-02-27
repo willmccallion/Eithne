@@ -47,4 +47,8 @@ impl ArchPlatform for Platform {
     fn halt_once() {
         unsafe { core::arch::asm!("wfi") }
     }
+
+    fn init_higher_half(_max_phys: u64) {
+        // TODO: RISC-V Sv48 direct-map setup
+    }
 }

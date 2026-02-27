@@ -58,3 +58,8 @@ pub fn test_paging() {
 pub fn halt_once() {
     platform::Platform::halt_once();
 }
+
+/// Set up the higher-half direct mapping of all physical memory.
+pub fn init_higher_half(max_phys: u64) {
+    platform::Platform::init_higher_half(max_phys);
+}

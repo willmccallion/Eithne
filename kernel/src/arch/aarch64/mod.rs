@@ -47,4 +47,8 @@ impl ArchPlatform for Platform {
     fn halt_once() {
         unsafe { core::arch::asm!("wfe") }
     }
+
+    fn init_higher_half(_max_phys: u64) {
+        // TODO: AArch64 TTBR1 direct-map setup
+    }
 }

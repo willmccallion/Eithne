@@ -71,21 +71,37 @@ impl VirtAddr {
     }
 }
 
-/// Convert physical to virtual address.
+use core::sync::atomic::{AtomicU64, Ordering};
+
+/// Offset added to physical addresses to get their kernel direct-map virtual
+/// address. Zero during early boot (identity map); set to `KERNEL_VIRT_BASE`
+/// by `mm::set_higher_half_offset` after the new CR3 is loaded.
+static PHYS_OFFSET: AtomicU64 = AtomicU64::new(0);
+
+/// Switch `phys_to_virt` / `virt_to_phys` to use the higher-half offset.
 ///
-/// Currently identity-mapped (UEFI gives us 1:1 phys=virt).
-/// When we set up a higher-half kernel, this will add KERNEL_VIRT_BASE.
+/// Must be called immediately after `arch::init_higher_half` loads the new
+/// CR3.  All subsequent allocations and pointer dereferences will use the
+/// direct-map region.
+pub fn set_higher_half_offset(offset: u64) {
+    PHYS_OFFSET.store(offset, Ordering::Release);
+}
+
+/// Convert physical to virtual address via the kernel direct-map region.
+///
+/// During early boot this is an identity map (offset = 0).
+/// After `set_higher_half_offset` it adds `KERNEL_VIRT_BASE`.
 #[inline(always)]
-pub const fn phys_to_virt(phys: PhysAddr) -> VirtAddr {
-    VirtAddr::new(phys.as_u64())
+pub fn phys_to_virt(phys: PhysAddr) -> VirtAddr {
+    VirtAddr::new(phys.as_u64() + PHYS_OFFSET.load(Ordering::Acquire))
 }
 
 /// Convert virtual to physical address.
 ///
 /// Inverse of `phys_to_virt`. Only valid for the kernel direct-map region.
 #[inline(always)]
-pub const fn virt_to_phys(virt: VirtAddr) -> PhysAddr {
-    PhysAddr::new(virt.as_u64())
+pub fn virt_to_phys(virt: VirtAddr) -> PhysAddr {
+    PhysAddr::new(virt.as_u64() - PHYS_OFFSET.load(Ordering::Acquire))
 }
 
 impl From<u64> for PhysAddr {

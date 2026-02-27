@@ -6,7 +6,7 @@ pub mod layout;
 pub mod page;
 pub mod traits;
 
-pub use addr::{PhysAddr, VirtAddr};
+pub use addr::{PhysAddr, VirtAddr, set_higher_half_offset};
 pub use traits::{FrameAllocator, PageMapper};
 
 /// Initialize the entire memory management subsystem.

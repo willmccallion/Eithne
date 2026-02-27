@@ -59,4 +59,8 @@ impl ArchPlatform for Platform {
     fn halt_once() {
         cpu::halt_once();
     }
+
+    fn init_higher_half(max_phys: u64) {
+        paging::init_higher_half(max_phys);
+    }
 }

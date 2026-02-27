@@ -41,13 +41,18 @@ fn kernel_main(boot_info: mm::boot_info::BootMemoryInfo) {
     // 1. Memory management (frame allocator + heap).
     mm::init(&boot_info);
 
-    // 2. GDT, IDT, PIC, interrupts.
+    // 2. Higher-half direct map: all physical memory at KERNEL_VIRT_BASE.
+    //    Must happen before init_interrupts so GDT/IDT pointers are stable.
+    arch::init_higher_half(boot_info.max_phys_addr.as_u64());
+    mm::set_higher_half_offset(crate::mm::layout::KERNEL_VIRT_BASE);
+
+    // 3. GDT, IDT, PIC, interrupts.
     arch::init_interrupts();
 
-    // 3. Page table smoke test.
+    // 4. Page table smoke test.
     arch::test_paging();
 
-    // 4. Scheduler.
+    // 5. Scheduler.
     sched::init();
 
     sched::spawn("idle", idle_task);

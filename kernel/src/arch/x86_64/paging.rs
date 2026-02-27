@@ -411,6 +411,91 @@ pub fn flush_tlb() {
 }
 
 // ---------------------------------------------------------------------------
+// Higher-half setup
+// ---------------------------------------------------------------------------
+
+/// Map all of physical memory at `KERNEL_VIRT_BASE` using 1 GiB huge pages,
+/// keeping the existing identity map intact, then load the new CR3.
+///
+/// After this returns, every physical address `p` is accessible at both
+/// `p` (identity) and `KERNEL_VIRT_BASE + p` (direct map).
+/// `mm::addr::phys_to_virt` is updated separately to use the new offset.
+///
+/// Uses 1 GiB pages (PDPT huge entries) to map `max_phys` bytes with
+/// minimal page table overhead: one PDPT per 512 GiB, one entry per GiB.
+pub fn init_higher_half(max_phys: u64) {
+    use crate::mm::layout::KERNEL_VIRT_BASE;
+
+    // Round max_phys up to the next 1 GiB boundary.
+    const GIB: u64 = 1 << 30;
+    let gib_count = max_phys.div_ceil(GIB) as usize;
+
+    // Allocate a fresh PML4 (identity-mapped, so phys == virt right now).
+    let pml4_phys = frame::alloc_frame().expect("[paging] OOM for higher-half PML4");
+    let pml4 = unsafe { &mut *(phys_to_virt(pml4_phys).as_mut_ptr::<PageTable>()) };
+    pml4.zero();
+
+    // --- Copy existing UEFI identity-map entries ---
+    // Read current CR3 and clone its PML4 entries into the new PML4.
+    // This preserves UEFI runtime services mappings and lets us keep
+    // executing after the CR3 switch.
+    let old_cr3: u64;
+    unsafe { asm!("mov {}, cr3", out(reg) old_cr3, options(nomem, nostack)) };
+    let old_pml4 = unsafe {
+        &*(phys_to_virt(PhysAddr::new(old_cr3 & flags::ADDR_MASK)).as_ptr::<PageTable>())
+    };
+    for i in 0..512 {
+        pml4.entries[i] = old_pml4.entries[i];
+    }
+
+    // --- Build the direct-map region at KERNEL_VIRT_BASE ---
+    // KERNEL_VIRT_BASE = 0xFFFF_8000_0000_0000
+    // PML4 index for that address:
+    let base_pml4_idx = ((KERNEL_VIRT_BASE >> 39) & 0x1FF) as usize;
+
+    // Each PML4 entry covers 512 GiB.  We need ceil(gib_count / 512) PDPTs.
+    let pdpt_count = gib_count.div_ceil(512);
+
+    for pdpt_i in 0..pdpt_count {
+        let pdpt_phys = frame::alloc_frame().expect("[paging] OOM for higher-half PDPT");
+        let pdpt = unsafe { &mut *(phys_to_virt(pdpt_phys).as_mut_ptr::<PageTable>()) };
+        pdpt.zero();
+
+        // Fill this PDPT with 1 GiB huge page entries.
+        let gib_base = pdpt_i as u64 * 512 * GIB;
+        for entry_i in 0..512usize {
+            let phys_gib = gib_base + entry_i as u64 * GIB;
+            if phys_gib >= max_phys.div_ceil(GIB) * GIB && phys_gib >= max_phys {
+                break;
+            }
+            // 1 GiB page entry: PRESENT | WRITABLE | HUGE | GLOBAL | NO_EXEC
+            pdpt.entries[entry_i].0 = (phys_gib & 0x000F_FFFF_C000_0000)
+                | flags::PRESENT
+                | flags::WRITABLE
+                | flags::HUGE
+                | flags::GLOBAL
+                | flags::NO_EXEC;
+        }
+
+        // Wire this PDPT into the new PML4.
+        let pml4_idx = base_pml4_idx + pdpt_i;
+        assert!(pml4_idx < 512, "[paging] higher-half exceeds PML4 bounds");
+        pml4.entries[pml4_idx].set(pdpt_phys, flags::PRESENT | flags::WRITABLE);
+    }
+
+    // Load the new PML4.
+    unsafe {
+        asm!("mov cr3, {}", in(reg) pml4_phys.as_u64(), options(nomem, nostack));
+    }
+
+    crate::println!(
+        "[paging] higher-half direct map: {} GiB at {:#x}",
+        gib_count,
+        KERNEL_VIRT_BASE,
+    );
+}
+
+// ---------------------------------------------------------------------------
 // Smoke test called from mm::init
 // ---------------------------------------------------------------------------
 

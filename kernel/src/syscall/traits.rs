@@ -1,3 +1,5 @@
+use crate::fs::traits::FsError;
+
 /// System call result type.
 pub type SyscallResult = Result<usize, SyscallError>;
 
@@ -11,6 +13,24 @@ pub enum SyscallError {
     IoError,
     NoMemory,
     WouldBlock,
+    AlreadyExists,
+    IsADirectory,
+    NotADirectory,
+}
+
+impl From<FsError> for SyscallError {
+    fn from(e: FsError) -> Self {
+        match e {
+            FsError::NotFound => SyscallError::NotFound,
+            FsError::PermissionDenied => SyscallError::PermissionDenied,
+            FsError::AlreadyExists => SyscallError::AlreadyExists,
+            FsError::NotADirectory => SyscallError::NotADirectory,
+            FsError::IsADirectory => SyscallError::IsADirectory,
+            FsError::IoError => SyscallError::IoError,
+            FsError::NoSpace => SyscallError::NoMemory,
+            FsError::InvalidPath => SyscallError::InvalidArgument,
+        }
+    }
 }
 
 /// System call handler trait.

@@ -1,10 +1,12 @@
 pub mod context;
+pub mod fd;
 pub mod process;
 pub mod round_robin;
 pub mod thread;
 pub mod traits;
 pub mod user;
 
+pub use fd::FdTable;
 pub use traits::{Scheduler, TaskId};
 
 use core::sync::atomic::{AtomicBool, Ordering};
@@ -53,6 +55,24 @@ pub fn spawn_user_from_elf(elf_data: &[u8]) -> Option<TaskId> {
     crate::println!("[sched] spawned user task {:?} '{}'", id, task.name);
     guard.add_task(task);
     Some(id)
+}
+
+/// Run a closure with mutable access to the current task's file descriptor table.
+///
+/// The scheduler lock is held for the duration of the closure. The closure
+/// must NOT call back into the scheduler (no blocking, yielding, etc.).
+pub fn with_current_fd_table<F, R>(f: F) -> Result<R, crate::syscall::traits::SyscallError>
+where
+    F: FnOnce(&mut FdTable) -> Result<R, crate::syscall::traits::SyscallError>,
+{
+    let sched = SCHEDULER
+        .get()
+        .ok_or(crate::syscall::traits::SyscallError::IoError)?;
+    let mut guard = sched.lock();
+    let fdt = guard
+        .current_fd_table()
+        .ok_or(crate::syscall::traits::SyscallError::InvalidArgument)?;
+    f(fdt)
 }
 
 /// Called from the timer IRQ handler each tick.

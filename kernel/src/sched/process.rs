@@ -21,6 +21,8 @@ pub struct Task {
     pub aspace: Option<crate::arch::x86_64::KernelAddressSpace>,
     /// Top of this task's kernel stack; used to update SYSCALL_KSTACK_TOP on switch.
     pub kstack_top: u64,
+    /// Per-process file descriptor table. None for kernel threads.
+    pub fd_table: Option<super::fd::FdTable>,
 }
 
 impl Task {
@@ -37,6 +39,7 @@ impl Task {
             name,
             #[cfg(target_arch = "x86_64")]
             aspace: None,
+            fd_table: None,
         })
     }
 }

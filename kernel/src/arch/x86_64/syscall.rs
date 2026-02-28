@@ -271,6 +271,9 @@ extern "C" fn syscall_dispatch(frame: &mut SyscallFrame) {
                 SyscallError::IoError => 5,          // EIO
                 SyscallError::NoMemory => 12,        // ENOMEM
                 SyscallError::WouldBlock => 11,      // EAGAIN
+                SyscallError::AlreadyExists => 17,   // EEXIST
+                SyscallError::IsADirectory => 21,    // EISDIR
+                SyscallError::NotADirectory => 20,   // ENOTDIR
             };
             errno.wrapping_neg() // return negative errno
         }

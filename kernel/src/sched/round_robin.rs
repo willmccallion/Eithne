@@ -123,6 +123,14 @@ impl RoundRobinScheduler {
         Some((new_rsp, new_kstack_top, new_cr3))
     }
 
+    /// Access the current task's file descriptor table mutably.
+    ///
+    /// Returns `None` if there is no current task or it has no fd table
+    /// (kernel threads).
+    pub fn current_fd_table(&mut self) -> Option<&mut super::fd::FdTable> {
+        self.current.as_mut().and_then(|t| t.fd_table.as_mut())
+    }
+
     /// Mark the currently running task as Dead so it won't be re-queued.
     pub fn kill_current(&mut self) {
         if let Some(ref mut cur) = self.current {

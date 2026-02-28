@@ -101,5 +101,6 @@ pub fn create_user_task_from_elf(id: TaskId, name: &'static str, elf_data: &[u8]
         name,
         aspace: Some(loaded.aspace),
         kstack_top: kstack_top.as_u64(),
+        fd_table: Some(super::fd::FdTable::new_with_stdio()),
     })
 }

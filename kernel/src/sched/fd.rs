@@ -7,8 +7,10 @@ use crate::syscall::traits::SyscallError;
 
 const MAX_FDS: usize = 256;
 
+#[derive(Clone)]
 struct FdEntry {
     vfs_handle: FileHandle,
+    cloexec: bool,
 }
 
 pub struct FdTable {
@@ -46,7 +48,10 @@ impl FdTable {
                 continue;
             }
             if slot.is_none() {
-                *slot = Some(FdEntry { vfs_handle: handle });
+                *slot = Some(FdEntry {
+                    vfs_handle: handle,
+                    cloexec: false,
+                });
                 return Ok(i);
             }
         }
@@ -56,7 +61,10 @@ impl FdTable {
         if new_fd >= MAX_FDS {
             return Err(SyscallError::NoMemory);
         }
-        self.entries.push(Some(FdEntry { vfs_handle: handle }));
+        self.entries.push(Some(FdEntry {
+            vfs_handle: handle,
+            cloexec: false,
+        }));
         Ok(new_fd)
     }
 
@@ -78,5 +86,33 @@ impl FdTable {
             .ok_or(SyscallError::InvalidArgument)?;
         let entry = slot.take().ok_or(SyscallError::InvalidArgument)?;
         Ok(entry.vfs_handle)
+    }
+
+    /// Clone the entire fd table (used by fork).
+    pub fn clone_table(&self) -> Self {
+        Self {
+            entries: self.entries.clone(),
+        }
+    }
+
+    /// Close all FDs marked close-on-exec, returning their VFS handles.
+    pub fn close_cloexec(&mut self) -> Vec<FileHandle> {
+        let mut handles = Vec::new();
+        for slot in self.entries.iter_mut() {
+            if let Some(entry) = slot.as_ref() {
+                if entry.cloexec {
+                    handles.push(entry.vfs_handle);
+                    *slot = None;
+                }
+            }
+        }
+        handles
+    }
+
+    /// Set the close-on-exec flag for an fd.
+    pub fn set_cloexec(&mut self, fd: usize, val: bool) {
+        if let Some(Some(entry)) = self.entries.get_mut(fd) {
+            entry.cloexec = val;
+        }
     }
 }

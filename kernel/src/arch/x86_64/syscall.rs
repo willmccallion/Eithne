@@ -8,6 +8,8 @@
 //!   RDI, RSI, RDX, R10, R8, R9 = arguments 1-6
 //!   RAX = return value (negative errno on error)
 
+extern crate alloc;
+
 use core::arch::global_asm;
 
 // MSR addresses
@@ -256,9 +258,59 @@ pub struct SyscallFrame {
 // Rust syscall dispatcher
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Linux errno constants
+// ---------------------------------------------------------------------------
+
+const EPERM: u64 = 1;
+const ENOENT: u64 = 2;
+const EIO: u64 = 5;
+const ECHILD: u64 = 10;
+const EAGAIN: u64 = 11;
+const ENOMEM: u64 = 12;
+const EEXIST: u64 = 17;
+const ENOTDIR: u64 = 20;
+const EISDIR: u64 = 21;
+const EINVAL: u64 = 22;
+const ENOSYS: u64 = 38;
+const ENOEXEC: u64 = 8;
+
+fn syscall_error_to_errno(e: crate::syscall::traits::SyscallError) -> u64 {
+    use crate::syscall::traits::SyscallError;
+    match e {
+        SyscallError::InvalidSyscall => ENOSYS,
+        SyscallError::InvalidArgument => EINVAL,
+        SyscallError::PermissionDenied => EPERM,
+        SyscallError::NotFound => ENOENT,
+        SyscallError::IoError => EIO,
+        SyscallError::NoMemory => ENOMEM,
+        SyscallError::WouldBlock => EAGAIN,
+        SyscallError::AlreadyExists => EEXIST,
+        SyscallError::IsADirectory => EISDIR,
+        SyscallError::NotADirectory => ENOTDIR,
+        SyscallError::NoChildren => ECHILD,
+    }
+}
+
 #[unsafe(no_mangle)]
 extern "C" fn syscall_dispatch(frame: &mut SyscallFrame) {
+    use crate::syscall::table::{SYS_EXECVE, SYS_FORK};
+
     let num = frame.rax as usize;
+
+    // Fork and exec need direct access to the frame — handle before generic dispatch.
+    match num {
+        SYS_FORK => {
+            frame.rax = do_fork(frame);
+            return;
+        }
+        SYS_EXECVE => {
+            do_exec(frame);
+            return;
+        }
+        _ => {}
+    }
+
     let args = [
         frame.rdi as usize,
         frame.rsi as usize,
@@ -272,21 +324,261 @@ extern "C" fn syscall_dispatch(frame: &mut SyscallFrame) {
 
     frame.rax = match result {
         Ok(val) => val as u64,
-        Err(e) => {
-            use crate::syscall::traits::SyscallError;
-            let errno: u64 = match e {
-                SyscallError::InvalidSyscall => 38,  // ENOSYS
-                SyscallError::InvalidArgument => 22, // EINVAL
-                SyscallError::PermissionDenied => 1, // EPERM
-                SyscallError::NotFound => 2,         // ENOENT
-                SyscallError::IoError => 5,          // EIO
-                SyscallError::NoMemory => 12,        // ENOMEM
-                SyscallError::WouldBlock => 11,      // EAGAIN
-                SyscallError::AlreadyExists => 17,   // EEXIST
-                SyscallError::IsADirectory => 21,    // EISDIR
-                SyscallError::NotADirectory => 20,   // ENOTDIR
-            };
-            errno.wrapping_neg() // return negative errno
+        Err(e) => syscall_error_to_errno(e).wrapping_neg(),
+    };
+}
+
+// ---------------------------------------------------------------------------
+// fork()
+// ---------------------------------------------------------------------------
+
+/// User-mode segment selectors (must match gdt.rs).
+const USER_CS: u64 = 0x18 | 3;
+const USER_DS: u64 = 0x20 | 3;
+/// RFLAGS with interrupts enabled + reserved bit 1.
+const USER_RFLAGS: u64 = 0x202;
+/// Pseudo-vector number for user tasks created via fork (not a real IRQ).
+const USER_TASK_VECTOR: u64 = 0xFD;
+
+fn do_fork(parent_frame: &SyscallFrame) -> u64 {
+    use crate::mm::addr::phys_to_virt;
+    use crate::mm::frame;
+    use crate::mm::page::PAGE_SIZE;
+    use crate::sched::context::{InterruptFrame, TaskStack};
+    use crate::sched::process::{Task, TaskState};
+
+    // Gather info from the current (parent) task under the scheduler lock.
+    let result = crate::sched::with_scheduler(|guard| {
+        let cur = match guard.current_task_mut() {
+            Some(t) => t,
+            None => return Err(ENOMEM),
+        };
+
+        let parent_id = cur.id;
+
+        // Clone address space.
+        let aspace = match cur.aspace.as_ref() {
+            Some(a) => match a.clone_user_pages() {
+                Ok(child) => child,
+                Err(_) => return Err(ENOMEM),
+            },
+            None => return Err(EINVAL),
+        };
+
+        // Clone FD table.
+        let fdt = match cur.fd_table.as_ref() {
+            Some(f) => f.clone_table(),
+            None => crate::sched::fd::FdTable::new_with_stdio(),
+        };
+
+        Ok((parent_id, aspace, fdt))
+    });
+
+    let (parent_id, child_aspace, child_fdt) = match result {
+        Some(Ok(v)) => v,
+        Some(Err(e)) => return e.wrapping_neg(),
+        None => return ENOMEM.wrapping_neg(),
+    };
+
+    // Allocate child kernel stack.
+    let kernel_stack_pages = TaskStack::STACK_PAGES;
+    let kstack_phys = match frame::alloc_pages(crate::mm::page::pages_to_order(kernel_stack_pages))
+    {
+        Some(p) => p,
+        None => return ENOMEM.wrapping_neg(),
+    };
+    let kstack_base = phys_to_virt(kstack_phys);
+    let kstack_top = kstack_base.offset((kernel_stack_pages * PAGE_SIZE) as u64);
+
+    // Copy the parent's SyscallFrame to the top of the child's kernel stack
+    // as an InterruptFrame (same layout). Set child's RAX = 0 (fork returns 0 in child).
+    let child_frame_ptr = (kstack_top.as_u64() - core::mem::size_of::<InterruptFrame>() as u64)
+        as *mut InterruptFrame;
+    unsafe {
+        child_frame_ptr.write(InterruptFrame {
+            r15: parent_frame.r15,
+            r14: parent_frame.r14,
+            r13: parent_frame.r13,
+            r12: parent_frame.r12,
+            r11: parent_frame.r11,
+            r10: parent_frame.r10,
+            r9: parent_frame.r9,
+            r8: parent_frame.r8,
+            rbp: parent_frame.rbp,
+            rdi: parent_frame.rdi,
+            rsi: parent_frame.rsi,
+            rdx: parent_frame.rdx,
+            rcx: parent_frame.rcx,
+            rbx: parent_frame.rbx,
+            rax: 0, // child gets 0 from fork
+            vector: USER_TASK_VECTOR,
+            error_code: 0,
+            rip: parent_frame.rip,
+            cs: USER_CS,
+            rflags: USER_RFLAGS,
+            rsp: parent_frame.rsp,
+            ss: USER_DS,
+        });
+    }
+
+    // Build child Task and add to scheduler.
+    let child_id = match crate::sched::alloc_id() {
+        Some(id) => id,
+        None => return ENOMEM.wrapping_neg(),
+    };
+
+    let child_task = Task {
+        id: child_id,
+        state: TaskState::Ready,
+        saved_rsp: child_frame_ptr as u64,
+        stack: TaskStack::from_raw(kstack_base, kernel_stack_pages),
+        name: "forked",
+        aspace: Some(child_aspace),
+        kstack_top: kstack_top.as_u64(),
+        fd_table: Some(child_fdt),
+        parent: Some(parent_id),
+        exit_code: None,
+    };
+
+    crate::sched::add_task(child_task);
+
+    // Parent gets the child's PID.
+    child_id.0
+}
+
+// ---------------------------------------------------------------------------
+// exec(path)
+// ---------------------------------------------------------------------------
+
+fn do_exec(frame: &mut SyscallFrame) {
+    use crate::elf::loader;
+    use crate::elf::parser::Elf64Info;
+    use crate::fs::traits::OpenFlags;
+
+    let path_ptr = frame.rdi as usize;
+
+    // Copy path from user space.
+    let path = match crate::syscall::dispatch::copy_path_from_user(path_ptr) {
+        Ok(p) => p,
+        Err(_) => {
+            frame.rax = EINVAL.wrapping_neg();
+            return;
         }
     };
+
+    // Read the entire file from VFS.
+    let file_data = match read_file_from_vfs(path.as_str()) {
+        Ok(data) => data,
+        Err(_) => {
+            frame.rax = ENOENT.wrapping_neg();
+            return;
+        }
+    };
+
+    // Parse ELF.
+    let elf = match Elf64Info::parse(file_data.as_slice()) {
+        Ok(e) => e,
+        Err(_) => {
+            frame.rax = ENOEXEC.wrapping_neg();
+            return;
+        }
+    };
+
+    // Load into new address space.
+    let loaded = match loader::load_elf(&elf) {
+        Ok(l) => l,
+        Err(_) => {
+            frame.rax = ENOMEM.wrapping_neg();
+            return;
+        }
+    };
+
+    // Close close-on-exec FDs and swap address space.
+    {
+        let result = crate::sched::with_current_task(|task| {
+            // Close cloexec FDs.
+            if let Some(ref mut fdt) = task.fd_table {
+                let handles = fdt.close_cloexec();
+                for h in handles {
+                    let _ = crate::fs::vfs::close(h);
+                }
+            }
+
+            // Replace address space (old one is dropped, freeing pages).
+            task.aspace = Some(loaded.aspace);
+
+            Ok(())
+        });
+        if result.is_err() {
+            frame.rax = ENOMEM.wrapping_neg();
+            return;
+        }
+    }
+
+    // Activate the new address space.
+    let new_cr3 = crate::sched::with_current_task(|task| {
+        Ok(task.aspace.as_ref().map(|a| a.cr3().as_u64()).unwrap_or(0))
+    })
+    .unwrap_or(0);
+    if new_cr3 != 0 {
+        unsafe {
+            core::arch::asm!("mov cr3, {}", in(reg) new_cr3, options(nomem, nostack));
+        }
+    }
+
+    // Update the frame to jump to the new entry point.
+    frame.rip = loaded.entry_point;
+    frame.rsp = loaded.stack_top;
+    frame.rflags = USER_RFLAGS;
+    frame.cs = USER_CS;
+    frame.ss = USER_DS;
+    frame.rax = 0;
+    // Clear all GPRs for a clean environment.
+    frame.rbx = 0;
+    frame.rcx = loaded.entry_point; // RCX = RIP for sysret path
+    frame.rdx = 0;
+    frame.rsi = 0;
+    frame.rdi = 0;
+    frame.rbp = 0;
+    frame.r8 = 0;
+    frame.r9 = 0;
+    frame.r10 = 0;
+    frame.r11 = USER_RFLAGS; // R11 = RFLAGS for sysret path
+    frame.r12 = 0;
+    frame.r13 = 0;
+    frame.r14 = 0;
+    frame.r15 = 0;
+}
+
+/// Read an entire file into a Vec<u8> via the VFS.
+fn read_file_from_vfs(path: &str) -> Result<alloc::vec::Vec<u8>, crate::fs::traits::FsError> {
+    use crate::fs::traits::OpenFlags;
+
+    let handle = crate::fs::vfs::open(
+        path,
+        OpenFlags {
+            read: true,
+            write: false,
+            create: false,
+            truncate: false,
+            append: false,
+        },
+    )?;
+
+    // Get file size via stat.
+    let stat = crate::fs::vfs::stat(path)?;
+    let size = stat.size as usize;
+
+    let mut data = alloc::vec![0u8; size];
+    let mut offset = 0;
+    while offset < size {
+        let n = crate::fs::vfs::read(handle, &mut data[offset..])?;
+        if n == 0 {
+            break;
+        }
+        offset += n;
+    }
+    crate::fs::vfs::close(handle)?;
+
+    Ok(data)
 }

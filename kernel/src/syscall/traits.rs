@@ -16,6 +16,7 @@ pub enum SyscallError {
     AlreadyExists,
     IsADirectory,
     NotADirectory,
+    NoChildren,
 }
 
 impl From<FsError> for SyscallError {

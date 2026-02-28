@@ -207,16 +207,23 @@ fn kernel_main(
         println!("[fb] framebuffer console initialized");
     }
 
-    // 8. Scheduler.
+    // 8. Store init binary in VFS so `exec("/bin/shell")` works.
+    #[cfg(target_arch = "x86_64")]
+    if let Some(ref ramfs) = initramfs {
+        let phys_addr = ramfs.ptr.as_ptr() as u64;
+        let virt_ptr = mm::addr::phys_to_virt(mm::addr::PhysAddr::new(phys_addr));
+        let elf_data = unsafe { core::slice::from_raw_parts(virt_ptr.as_ptr::<u8>(), ramfs.len) };
+        store_init_in_vfs(elf_data);
+    }
+
+    // 9. Scheduler.
     sched::init();
 
     sched::spawn("idle", idle_task);
 
-    // 9. User-mode init process from ELF.
+    // 10. User-mode init process from ELF.
     #[cfg(target_arch = "x86_64")]
     if let Some(ref ramfs) = initramfs {
-        // Convert the physical pool pointer to a virtual address through the
-        // higher-half direct map.
         let phys_addr = ramfs.ptr.as_ptr() as u64;
         let virt_ptr = mm::addr::phys_to_virt(mm::addr::PhysAddr::new(phys_addr));
         let elf_data = unsafe { core::slice::from_raw_parts(virt_ptr.as_ptr::<u8>(), ramfs.len) };
@@ -230,6 +237,40 @@ fn kernel_main(
 
     // Fallback: if no tasks are runnable, halt.
     arch::halt();
+}
+
+/// Store the init ELF binary in the VFS at `/bin/shell` so child processes
+/// can be spawned via `exec("/bin/shell")`.
+fn store_init_in_vfs(elf_data: &[u8]) {
+    use fs::traits::OpenFlags;
+
+    if let Err(e) = fs::vfs::mkdir("/bin") {
+        println!("[init] warning: mkdir /bin failed: {:?}", e);
+    }
+
+    let handle = match fs::vfs::open(
+        "/bin/shell",
+        OpenFlags {
+            read: false,
+            write: true,
+            create: true,
+            truncate: true,
+            append: false,
+        },
+    ) {
+        Ok(h) => h,
+        Err(e) => {
+            println!("[init] failed to create /bin/shell: {:?}", e);
+            return;
+        }
+    };
+
+    match fs::vfs::write(handle, elf_data) {
+        Ok(n) => println!("[init] wrote {} bytes to /bin/shell", n),
+        Err(e) => println!("[init] write to /bin/shell failed: {:?}", e),
+    }
+
+    let _ = fs::vfs::close(handle);
 }
 
 fn idle_task() -> ! {

@@ -23,7 +23,9 @@ pub fn dispatch(num: usize, args: &[usize; 6]) -> SyscallResult {
         SYS_OPEN => sys_open(args),
         SYS_CLOSE => sys_close(args),
         SYS_STAT => sys_stat(args),
+        SYS_FORK | SYS_EXECVE => unreachable!("handled in arch syscall layer"),
         SYS_EXIT => sys_exit(args),
+        SYS_WAIT4 => sys_wait4(args),
         SYS_MKDIR => sys_mkdir(args),
         SYS_UNLINK => sys_unlink(args),
         SYS_READDIR => sys_readdir(args),
@@ -44,7 +46,7 @@ fn validate_user_ptr(ptr: usize) -> Result<(), SyscallError> {
 }
 
 /// Copy a NUL-terminated path string from user space.
-fn copy_path_from_user(ptr: usize) -> Result<String, SyscallError> {
+pub fn copy_path_from_user(ptr: usize) -> Result<String, SyscallError> {
     validate_user_ptr(ptr)?;
 
     let mut path = String::new();
@@ -349,6 +351,40 @@ fn sys_readdir(args: &[usize; 6]) -> SyscallResult {
 
 fn sys_exit(args: &[usize; 6]) -> SyscallResult {
     let code = args[0] as i32;
-    crate::println!("[syscall] process exited with code {}", code);
-    crate::sched::exit_current();
+    crate::sched::exit_current_with_code(code);
+}
+
+// ---------------------------------------------------------------------------
+// sys_wait4(pid, status_ptr, options, rusage) -> child_pid
+// ---------------------------------------------------------------------------
+
+/// `pid` semantics:
+///   - `usize::MAX` (i.e. -1 as unsigned): wait for any child
+///   - otherwise: wait for the specific child PID
+const WAIT_ANY: u64 = u64::MAX;
+
+fn sys_wait4(args: &[usize; 6]) -> SyscallResult {
+    let raw_pid = args[0];
+    let status_ptr = args[1];
+
+    // Convert to the u64 the scheduler expects.
+    // -1 (0xFFFF...) means "any child".
+    let child_pid = if raw_pid as isize == -1 {
+        WAIT_ANY
+    } else {
+        raw_pid as u64
+    };
+
+    let (pid, status) = crate::sched::wait_for_child(child_pid)?;
+
+    // Write wait status to user space if pointer is non-null.
+    if status_ptr != 0 {
+        validate_user_ptr(status_ptr)?;
+        let dst = status_ptr as *mut i32;
+        unsafe {
+            dst.write(status);
+        }
+    }
+
+    Ok(pid as usize)
 }

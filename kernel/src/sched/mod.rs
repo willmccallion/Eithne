@@ -22,6 +22,16 @@ use round_robin::RoundRobinScheduler;
 
 static SCHEDULER: Once<IrqSpinlock<RoundRobinScheduler>> = Once::new();
 
+/// Run a closure with the scheduler lock held (used by fork which needs
+/// direct access to the current task's fields).
+pub fn with_scheduler<F, R>(f: F) -> Option<R>
+where
+    F: FnOnce(&mut RoundRobinScheduler) -> R,
+{
+    let sched = SCHEDULER.get()?;
+    Some(f(&mut sched.lock()))
+}
+
 /// Set by the timer IRQ when the current timeslice expires.
 /// Cleared and acted on by `check_resched` at the `isr_common` exit.
 pub static NEED_RESCHED: AtomicBool = AtomicBool::new(false);
@@ -111,18 +121,120 @@ pub extern "C" fn check_resched(interrupted_rsp: u64) -> u64 {
     }
 }
 
-/// Mark the current task as Dead and yield.
+/// The TaskId of the first user process (init). Orphaned children are
+/// reparented here.
+const INIT_TASK_ID: TaskId = TaskId(2);
+
+/// TaskId of the currently running task.
+pub fn current_task_id() -> Option<TaskId> {
+    let sched = SCHEDULER.get()?;
+    sched.lock().current_id()
+}
+
+/// Run a closure with mutable access to the current task.
 ///
-/// Called from `sys_exit`.  The scheduler will never run the task again.
-/// This function does not return.
+/// The scheduler lock is held for the duration of the closure.
+pub fn with_current_task<F, R>(f: F) -> Result<R, crate::syscall::traits::SyscallError>
+where
+    F: FnOnce(&mut process::Task) -> Result<R, crate::syscall::traits::SyscallError>,
+{
+    let sched = SCHEDULER
+        .get()
+        .ok_or(crate::syscall::traits::SyscallError::IoError)?;
+    let mut guard = sched.lock();
+    let task = guard
+        .current_task_mut()
+        .ok_or(crate::syscall::traits::SyscallError::InvalidArgument)?;
+    f(task)
+}
+
+/// Add a pre-built Task to the scheduler queue (used by fork).
+pub fn add_task(task: Task) {
+    if let Some(sched) = SCHEDULER.get() {
+        sched.lock().add_task(task);
+    }
+}
+
+/// Allocate a new TaskId.
+pub fn alloc_id() -> Option<TaskId> {
+    let sched = SCHEDULER.get()?;
+    Some(sched.lock().alloc_id())
+}
+
+/// Mark the current task as Dead and yield (backwards compatibility).
 pub fn exit_current() -> ! {
+    exit_current_with_code(0);
+}
+
+/// Mark the current task as Dead with the given exit code and yield.
+///
+/// Encodes the exit code as a standard Unix wait status `(code & 0xFF) << 8`,
+/// reparents children to init, wakes the parent if blocked, then yields.
+/// Does not return.
+pub fn exit_current_with_code(code: i32) -> ! {
+    /// Standard Unix encoding: normal exit status = `(code & 0xFF) << 8`.
+    const EXIT_STATUS_SHIFT: i32 = 8;
+    const EXIT_CODE_MASK: i32 = 0xFF;
+
+    let status = (code & EXIT_CODE_MASK) << EXIT_STATUS_SHIFT;
+
     {
         let sched = SCHEDULER.get().expect("scheduler not init");
-        sched.lock().kill_current();
+        let mut guard = sched.lock();
+
+        // Record exit status.
+        guard.kill_current_with_status(status);
+
+        // Reparent all children to init.
+        if let Some(my_id) = guard.current_id() {
+            guard.reparent_children(my_id, INIT_TASK_ID);
+        }
+
+        // Wake the parent if it's blocked (waiting in waitpid).
+        if let Some(parent_id) = guard.current_parent() {
+            guard.wake_task(parent_id);
+        }
     }
     yield_cpu();
     loop {
         crate::arch::halt_once();
+    }
+}
+
+/// Block until a child exits, then return `(child_pid, wait_status)`.
+///
+/// If `child_pid` is `u64::MAX`, waits for any child.
+/// Returns `Err(NoChildren)` if the caller has no children.
+pub fn wait_for_child(child_pid: u64) -> Result<(u64, i32), crate::syscall::traits::SyscallError> {
+    use crate::syscall::traits::SyscallError;
+
+    loop {
+        let should_block = {
+            let sched = SCHEDULER.get().ok_or(SyscallError::IoError)?;
+            let mut guard = sched.lock();
+
+            let my_id = guard.current_id().ok_or(SyscallError::IoError)?;
+
+            // Try to collect a zombie child.
+            if let Some((tid, status)) = guard.collect_zombie(my_id, child_pid) {
+                return Ok((tid.0, status));
+            }
+
+            // No zombie — check if we have any children at all.
+            if !guard.has_children(my_id) {
+                return Err(SyscallError::NoChildren);
+            }
+
+            // Block this task; it will be woken when a child exits.
+            guard.block_current();
+            guard.prepare_switch()
+        };
+
+        if let Some(p) = should_block {
+            activate_task(p.new_kstack_top, p.new_cr3);
+            unsafe { context::yield_now(p.old_rsp_ptr, p.new_rsp) };
+        }
+        // After waking, loop to re-check for zombies.
     }
 }
 

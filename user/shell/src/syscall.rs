@@ -13,7 +13,10 @@ const SYS_WRITE: usize = 1;
 const SYS_OPEN: usize = 2;
 const SYS_CLOSE: usize = 3;
 const SYS_STAT: usize = 4;
+const SYS_FORK: usize = 57;
+const SYS_EXECVE: usize = 59;
 const SYS_EXIT: usize = 60;
+const SYS_WAIT4: usize = 61;
 const SYS_MKDIR: usize = 83;
 const SYS_UNLINK: usize = 87;
 const SYS_READDIR: usize = 217;
@@ -23,6 +26,24 @@ pub const O_RDONLY: usize = 0;
 pub const O_WRONLY: usize = 1;
 pub const O_CREAT: usize = 0x40;
 pub const O_TRUNC: usize = 0x200;
+
+/// Linux directory entry type for directories.
+pub const DT_DIR: u8 = 4;
+
+#[inline(always)]
+unsafe fn syscall0(num: usize) -> isize {
+    let ret: isize;
+    unsafe {
+        asm!(
+            "syscall",
+            inlateout("rax") num as isize => ret,
+            out("rcx") _,
+            out("r11") _,
+            options(nostack),
+        );
+    }
+    ret
+}
 
 #[inline(always)]
 unsafe fn syscall1(num: usize, a1: usize) -> isize {
@@ -131,6 +152,21 @@ pub fn sys_exit(code: usize) -> ! {
     loop {}
 }
 
+pub fn sys_fork() -> isize {
+    unsafe { syscall0(SYS_FORK) }
+}
+
+pub fn sys_exec(path: &str) -> isize {
+    with_cstr(path, |ptr| unsafe { syscall1(SYS_EXECVE, ptr as usize) })
+}
+
+/// Wait for a child process.
+///
+/// `pid == usize::MAX` (i.e. -1 as unsigned) means wait for any child.
+pub fn sys_waitpid(pid: usize, status: &mut i32) -> isize {
+    unsafe { syscall2(SYS_WAIT4, pid, status as *mut i32 as usize) }
+}
+
 // ---------------------------------------------------------------------------
 // Types matching kernel structs
 // ---------------------------------------------------------------------------
@@ -198,7 +234,7 @@ impl DirEntry {
 
     pub fn type_indicator(&self) -> &'static str {
         match self.d_type {
-            4 => "/", // DT_DIR
+            DT_DIR => "/",
             _ => "",
         }
     }
@@ -208,11 +244,14 @@ impl DirEntry {
 // Helpers
 // ---------------------------------------------------------------------------
 
+/// Negative errno returned when a path is too long.
+const NEG_EINVAL: isize = -22;
+
 /// Copy a Rust `&str` to a NUL-terminated buffer on the stack, then call `f`.
 fn with_cstr(s: &str, f: impl FnOnce(*const u8) -> isize) -> isize {
     let bytes = s.as_bytes();
     if bytes.len() >= 255 {
-        return -22; // EINVAL
+        return NEG_EINVAL;
     }
     let mut buf = [0u8; 256];
     buf[..bytes.len()].copy_from_slice(bytes);

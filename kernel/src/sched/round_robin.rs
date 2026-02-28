@@ -1,8 +1,17 @@
 extern crate alloc;
 use alloc::collections::VecDeque;
+use alloc::vec::Vec;
 
 use super::process::{Task, TaskState};
 use super::traits::{Scheduler, TaskId};
+
+/// Lightweight zombie record: task resources have been freed, only the exit
+/// status is kept until the parent calls waitpid.
+struct Zombie {
+    id: TaskId,
+    parent: TaskId,
+    status: i32,
+}
 
 pub struct RoundRobinScheduler {
     queue: VecDeque<Task>,
@@ -11,6 +20,8 @@ pub struct RoundRobinScheduler {
     next_id: u64,
     /// Scratch RSP for the boot context (has no Task struct).
     boot_rsp: u64,
+    /// Dead tasks awaiting waitpid from their parent.
+    zombies: Vec<Zombie>,
 }
 
 const TIMESLICE: usize = 2;
@@ -38,6 +49,7 @@ impl RoundRobinScheduler {
             ticks_remaining: TIMESLICE,
             next_id: 1,
             boot_rsp: 0,
+            zombies: Vec::new(),
         }
     }
 
@@ -75,6 +87,13 @@ impl RoundRobinScheduler {
 
         let old_rsp_ptr: *mut u64 = if let Some(mut prev) = self.current.take() {
             if prev.state == TaskState::Dead {
+                // Convert to zombie before dropping resources.
+                let id = prev.id;
+                let parent = prev.parent.unwrap_or(TaskId(0));
+                let status = prev.exit_code.unwrap_or(0);
+                prev.aspace = None;
+                prev.fd_table = None;
+                self.zombies.push(Zombie { id, parent, status });
                 drop(prev);
                 &mut self.boot_rsp as *mut u64
             } else {
@@ -109,6 +128,13 @@ impl RoundRobinScheduler {
 
         if let Some(mut prev) = self.current.take() {
             if prev.state == TaskState::Dead {
+                // Convert to zombie before dropping resources.
+                let id = prev.id;
+                let parent = prev.parent.unwrap_or(TaskId(0));
+                let status = prev.exit_code.unwrap_or(0);
+                prev.aspace = None;
+                prev.fd_table = None;
+                self.zombies.push(Zombie { id, parent, status });
                 drop(prev);
             } else {
                 if prev.state == TaskState::Running {
@@ -167,6 +193,115 @@ impl RoundRobinScheduler {
             self.ticks_remaining -= 1;
         }
         self.ticks_remaining == 0
+    }
+
+    // ------------------------------------------------------------------
+    // Process management (fork / exit / wait)
+    // ------------------------------------------------------------------
+
+    /// TaskId of the currently running task.
+    pub fn current_id(&self) -> Option<TaskId> {
+        self.current.as_ref().map(|t| t.id)
+    }
+
+    /// Parent TaskId of the currently running task.
+    pub fn current_parent(&self) -> Option<TaskId> {
+        self.current.as_ref().and_then(|t| t.parent)
+    }
+
+    /// Mark the current task as Dead with the given wait status.
+    pub fn kill_current_with_status(&mut self, status: i32) {
+        if let Some(ref mut cur) = self.current {
+            cur.state = TaskState::Dead;
+            cur.exit_code = Some(status);
+        }
+    }
+
+    /// Convert the current Dead task into a zombie record.
+    ///
+    /// Frees the task's address space, FD table, and kernel stack, keeping
+    /// only the PID, parent, and exit status for waitpid.
+    pub fn reap_current_to_zombie(&mut self) {
+        if let Some(ref mut cur) = self.current {
+            if cur.state != TaskState::Dead {
+                return;
+            }
+            let id = cur.id;
+            let parent = cur.parent.unwrap_or(TaskId(0));
+            let status = cur.exit_code.unwrap_or(0);
+
+            // Drop expensive resources while we still own the task.
+            cur.aspace = None;
+            cur.fd_table = None;
+
+            self.zombies.push(Zombie { id, parent, status });
+        }
+    }
+
+    /// Wake a specific Blocked task by TaskId (used to wake a parent waiting
+    /// on waitpid).
+    pub fn wake_task(&mut self, id: TaskId) -> bool {
+        for task in self.queue.iter_mut() {
+            if task.id == id && task.state == TaskState::Blocked {
+                task.state = TaskState::Ready;
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Collect (reap) a zombie child matching `parent` and optional `child_pid`.
+    ///
+    /// If `child_pid` is `u64::MAX`, any zombie child of `parent` is accepted.
+    /// Returns `(child_tid, wait_status)` and removes the zombie.
+    pub fn collect_zombie(&mut self, parent: TaskId, child_pid: u64) -> Option<(TaskId, i32)> {
+        let pos = self
+            .zombies
+            .iter()
+            .position(|z| z.parent == parent && (child_pid == u64::MAX || z.id.0 == child_pid))?;
+        let z = self.zombies.swap_remove(pos);
+        Some((z.id, z.status))
+    }
+
+    /// Check whether `parent` has any living children (in queue or current)
+    /// or zombie children.
+    pub fn has_children(&self, parent: TaskId) -> bool {
+        if self.zombies.iter().any(|z| z.parent == parent) {
+            return true;
+        }
+        if self.queue.iter().any(|t| t.parent == Some(parent)) {
+            return true;
+        }
+        if let Some(ref cur) = self.current {
+            if cur.parent == Some(parent) {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Reparent all children (alive + zombie) of `old_parent` to `new_parent`.
+    pub fn reparent_children(&mut self, old_parent: TaskId, new_parent: TaskId) {
+        for task in self.queue.iter_mut() {
+            if task.parent == Some(old_parent) {
+                task.parent = Some(new_parent);
+            }
+        }
+        for z in self.zombies.iter_mut() {
+            if z.parent == old_parent {
+                z.parent = new_parent;
+            }
+        }
+    }
+
+    /// Mutable access to the current task (used by fork/exec).
+    pub fn current_task_mut(&mut self) -> Option<&mut Task> {
+        self.current.as_mut()
+    }
+
+    /// Immutable access to the current task.
+    pub fn current_task(&self) -> Option<&Task> {
+        self.current.as_ref()
     }
 }
 

@@ -242,6 +242,73 @@ impl KernelAddressSpace {
         self.cr3
     }
 
+    /// Clone the user-space portion of this address space (PML4 indices 0..256).
+    ///
+    /// Creates a new address space with shared kernel mappings, then walks the
+    /// parent's user page tables, allocating fresh frames and copying their
+    /// contents for every mapped 4 KiB page.
+    pub fn clone_user_pages(&self) -> Result<Self, MapError> {
+        let mut child = Self::new_with_kernel_mappings()?;
+        let parent_pml4 = self.pml4_ref();
+
+        for i4 in 0..256 {
+            let e4 = parent_pml4.entries[i4];
+            if !e4.is_present() {
+                continue;
+            }
+            if e4.0 & flags::HUGE != 0 {
+                continue; // skip huge PML4 entries (shouldn't exist, but be safe)
+            }
+            let pdpt = unsafe { &*(phys_to_virt(e4.phys_addr()).as_ptr::<PageTable>()) };
+
+            for i3 in 0..512 {
+                let e3 = pdpt.entries[i3];
+                if !e3.is_present() {
+                    continue;
+                }
+                if e3.0 & flags::HUGE != 0 {
+                    continue; // skip 1 GiB huge pages
+                }
+                let pd = unsafe { &*(phys_to_virt(e3.phys_addr()).as_ptr::<PageTable>()) };
+
+                for i2 in 0..512 {
+                    let e2 = pd.entries[i2];
+                    if !e2.is_present() {
+                        continue;
+                    }
+                    if e2.0 & flags::HUGE != 0 {
+                        continue; // skip 2 MiB huge pages
+                    }
+                    let pt = unsafe { &*(phys_to_virt(e2.phys_addr()).as_ptr::<PageTable>()) };
+
+                    for i1 in 0..512 {
+                        let e1 = pt.entries[i1];
+                        if !e1.is_present() {
+                            continue;
+                        }
+
+                        let vaddr = vaddr_from_indices(i4, i3, i2, i1);
+                        let src_phys = e1.phys_addr();
+                        let page_flags = pte_to_page_flags(e1);
+
+                        // Allocate a new frame and copy the page contents.
+                        let dst_phys =
+                            frame::alloc_frame().ok_or(MapError::FrameAllocationFailed)?;
+                        unsafe {
+                            let src = phys_to_virt(src_phys).as_ptr::<u8>();
+                            let dst = phys_to_virt(dst_phys).as_mut_ptr::<u8>();
+                            core::ptr::copy_nonoverlapping(src, dst, PAGE_SIZE);
+                        }
+
+                        child.map(VirtAddr::new(vaddr), dst_phys, page_flags)?;
+                    }
+                }
+            }
+        }
+
+        Ok(child)
+    }
+
     fn pml4(&mut self) -> &mut PageTable {
         let virt = phys_to_virt(self.cr3);
         unsafe { &mut *(virt.as_mut_ptr::<PageTable>()) }
@@ -463,6 +530,33 @@ pub fn flush_tlb() {
         let cr3: u64;
         asm!("mov {}, cr3", out(reg) cr3, options(nomem, nostack));
         asm!("mov cr3, {}", in(reg) cr3, options(nomem, nostack));
+    }
+}
+
+// ---------------------------------------------------------------------------
+// PTE helpers for fork
+// ---------------------------------------------------------------------------
+
+/// Reconstruct `PageFlags` from a raw x86_64 leaf PTE.
+fn pte_to_page_flags(entry: PageTableEntry) -> PageFlags {
+    PageFlags {
+        readable: true,
+        writable: entry.0 & flags::WRITABLE != 0,
+        executable: entry.0 & flags::NO_EXEC == 0,
+        user_accessible: entry.0 & flags::USER != 0,
+        cache_disable: entry.0 & flags::CACHE_DISABLE != 0,
+    }
+}
+
+/// Reconstruct a virtual address from its four 9-bit page table indices.
+fn vaddr_from_indices(pml4: usize, pdpt: usize, pd: usize, pt: usize) -> u64 {
+    let raw =
+        ((pml4 as u64) << 39) | ((pdpt as u64) << 30) | ((pd as u64) << 21) | ((pt as u64) << 12);
+    // Sign-extend bit 47 to bits 48..63 for canonical addresses.
+    if raw & (1u64 << 47) != 0 {
+        raw | 0xFFFF_0000_0000_0000
+    } else {
+        raw
     }
 }
 

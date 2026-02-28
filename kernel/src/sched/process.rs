@@ -23,6 +23,10 @@ pub struct Task {
     pub kstack_top: u64,
     /// Per-process file descriptor table. None for kernel threads.
     pub fd_table: Option<super::fd::FdTable>,
+    /// Parent task ID (None for the init process and kernel threads).
+    pub parent: Option<TaskId>,
+    /// Exit code set by sys_exit; used to build wait status.
+    pub exit_code: Option<i32>,
 }
 
 impl Task {
@@ -40,6 +44,8 @@ impl Task {
             #[cfg(target_arch = "x86_64")]
             aspace: None,
             fd_table: None,
+            parent: None,
+            exit_code: None,
         })
     }
 }

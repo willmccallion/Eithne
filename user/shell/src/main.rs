@@ -19,8 +19,8 @@ const CLR_BLUE: &str = "\x1b[1;34m";
 const CLR_CYAN: &str = "\x1b[1;36m";
 
 const COMMANDS: &[&[u8]] = &[
-    b"cat", b"cd", b"clear", b"echo", b"help",
-    b"ls", b"mkdir", b"pwd", b"rm", b"stat", b"write",
+    b"cat", b"cd", b"clear", b"echo", b"exit", b"help", b"ls", b"mkdir", b"pwd", b"rm", b"run",
+    b"stat", b"write",
 ];
 
 // ---------------------------------------------------------------------------
@@ -339,6 +339,8 @@ fn dispatch_command(input: &[u8], cwd: &mut [u8; 256], cwd_len: &mut usize) {
         b"cd" => cmd_cd(args, cwd, cwd_len),
         b"pwd" => cmd_pwd(&cwd[..*cwd_len]),
         b"clear" => cmd_clear(),
+        b"exit" => cmd_exit(args),
+        b"run" => cmd_run(args, &cwd[..*cwd_len]),
         _ => {
             print(CLR_RED);
             print("error");
@@ -431,6 +433,16 @@ fn cmd_help() {
     print("clear");
     print(CLR_RESET);
     print("             clear screen\n");
+    print("  ");
+    print(CLR_BOLD);
+    print("exit");
+    print(CLR_RESET);
+    print(" [code]       exit shell\n");
+    print("  ");
+    print(CLR_BOLD);
+    print("run");
+    print(CLR_RESET);
+    print(" <path>        run program (fork+exec)\n");
 }
 
 fn cmd_echo(args: &[u8]) {
@@ -459,7 +471,7 @@ fn cmd_ls(args: &[u8], cwd: &[u8]) {
     for i in 0..count {
         let offset = i * ENTRY_SIZE;
         let entry = unsafe { &*(buf.as_ptr().add(offset) as *const DirEntry) };
-        if entry.d_type == 4 {
+        if entry.d_type == DT_DIR {
             // Directory — bold blue
             print(CLR_BLUE);
             print_bytes(entry.name());
@@ -616,4 +628,84 @@ fn cmd_pwd(cwd: &[u8]) {
 fn cmd_clear() {
     // ANSI escape: clear screen + cursor home
     print("\x1b[2J\x1b[H");
+}
+
+fn cmd_exit(args: &[u8]) {
+    let code = if args.is_empty() {
+        0
+    } else {
+        parse_usize(args)
+    };
+    sys_exit(code);
+}
+
+// ---------------------------------------------------------------------------
+// Wait status macros (standard Unix encoding)
+// ---------------------------------------------------------------------------
+
+/// Standard Unix: low 7 bits are the signal number (0 for normal exit).
+const WAIT_STATUS_SIGNAL_MASK: i32 = 0x7F;
+/// Standard Unix: bits 15..8 hold the exit code.
+const WAIT_STATUS_CODE_SHIFT: i32 = 8;
+const WAIT_STATUS_CODE_MASK: i32 = 0xFF;
+
+/// True if the child exited normally (not killed by a signal).
+fn wifexited(status: i32) -> bool {
+    (status & WAIT_STATUS_SIGNAL_MASK) == 0
+}
+
+/// Extract the exit code from a normal-exit wait status.
+fn wexitstatus(status: i32) -> i32 {
+    (status >> WAIT_STATUS_CODE_SHIFT) & WAIT_STATUS_CODE_MASK
+}
+
+/// Exit code used when exec fails (standard Unix convention).
+const EXEC_FAILURE_EXIT_CODE: usize = 127;
+
+fn cmd_run(args: &[u8], cwd: &[u8]) {
+    if args.is_empty() {
+        println("usage: run <path>");
+        return;
+    }
+
+    let (resolved, rlen) = resolve_path(cwd, args);
+    let path = bytes_to_str(&resolved[..rlen]);
+
+    let pid = sys_fork();
+    if pid == 0 {
+        // Child: replace with the new program.
+        let ret = sys_exec(path);
+        // exec only returns on failure.
+        print_error("exec", ret);
+        sys_exit(EXEC_FAILURE_EXIT_CODE);
+    } else if pid > 0 {
+        // Parent: wait for child.
+        let mut status: i32 = 0;
+        let ret = sys_waitpid(pid as usize, &mut status);
+        if ret < 0 {
+            print_error("waitpid", ret);
+        } else if wifexited(status) {
+            let code = wexitstatus(status);
+            if code != 0 {
+                print("child exited with code ");
+                print_isize(code as isize);
+                print("\n");
+            }
+        }
+    } else {
+        print_error("fork", pid);
+    }
+}
+
+/// Parse a decimal number from a byte slice.
+fn parse_usize(b: &[u8]) -> usize {
+    let mut n: usize = 0;
+    for &c in b {
+        if c >= b'0' && c <= b'9' {
+            n = n * 10 + (c - b'0') as usize;
+        } else {
+            break;
+        }
+    }
+    n
 }

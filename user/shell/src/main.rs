@@ -18,6 +18,11 @@ const CLR_GREEN: &str = "\x1b[1;32m";
 const CLR_BLUE: &str = "\x1b[1;34m";
 const CLR_CYAN: &str = "\x1b[1;36m";
 
+const COMMANDS: &[&[u8]] = &[
+    b"cat", b"cd", b"clear", b"echo", b"help",
+    b"ls", b"mkdir", b"pwd", b"rm", b"stat", b"write",
+];
+
 // ---------------------------------------------------------------------------
 // Entry point
 // ---------------------------------------------------------------------------
@@ -42,7 +47,7 @@ extern "C" fn main() -> ! {
     let mut line = [0u8; LINE_MAX];
     loop {
         print_prompt(&cwd[..cwd_len]);
-        let len = read_line(&mut line);
+        let len = read_line(&mut line, &cwd[..cwd_len]);
         if len == 0 {
             continue;
         }
@@ -129,7 +134,7 @@ fn print_error(msg: &str, errno: isize) {
 // Line reading
 // ---------------------------------------------------------------------------
 
-fn read_line(buf: &mut [u8; LINE_MAX]) -> usize {
+fn read_line(buf: &mut [u8; LINE_MAX], cwd: &[u8]) -> usize {
     let mut len: usize = 0;
     let mut ch = [0u8; 1];
 
@@ -150,20 +155,85 @@ fn read_line(buf: &mut [u8; LINE_MAX]) -> usize {
             0x08 | 0x7F => {
                 if len > 0 {
                     len -= 1;
-                    // Erase character on terminal: BS, space, BS
                     print_bytes(&[0x08, b' ', 0x08]);
                 }
+            }
+            // Tab — autocomplete command name
+            b'\t' => {
+                try_complete(buf, &mut len, cwd);
             }
             // Normal printable character
             _ => {
                 if len < LINE_MAX {
                     buf[len] = c;
                     len += 1;
-                    // Echo
                     print_bytes(&[c]);
                 }
             }
         }
+    }
+}
+
+/// Tab-complete command names. Only acts when the cursor is still in the
+/// first word (no space typed yet).
+fn try_complete(buf: &mut [u8; LINE_MAX], len: &mut usize, cwd: &[u8]) {
+    let prefix = &buf[..*len];
+
+    // Only complete the command word (before any space).
+    let mut has_space = false;
+    let mut i = 0;
+    while i < prefix.len() {
+        if prefix[i] == b' ' {
+            has_space = true;
+            break;
+        }
+        i += 1;
+    }
+    if has_space {
+        return;
+    }
+
+    // Gather matches.
+    let mut matches = [0u8; 16];
+    let mut count: usize = 0;
+    for (idx, cmd) in COMMANDS.iter().enumerate() {
+        if cmd.len() >= prefix.len() && cmd[..prefix.len()] == *prefix {
+            if count < matches.len() {
+                matches[count] = idx as u8;
+                count += 1;
+            }
+        }
+    }
+
+    if count == 0 {
+        return;
+    }
+
+    if count == 1 {
+        // Single match — complete and append a space.
+        let cmd = COMMANDS[matches[0] as usize];
+        for &b in &cmd[*len..] {
+            if *len < LINE_MAX {
+                buf[*len] = b;
+                *len += 1;
+                print_bytes(&[b]);
+            }
+        }
+        if *len < LINE_MAX {
+            buf[*len] = b' ';
+            *len += 1;
+            print_bytes(&[b' ']);
+        }
+    } else {
+        // Multiple matches — print them, then reprint prompt + input.
+        print("\n");
+        for i in 0..count {
+            print_bytes(COMMANDS[matches[i] as usize]);
+            print("  ");
+        }
+        print("\n");
+        print_prompt(cwd);
+        print_bytes(&buf[..*len]);
     }
 }
 
@@ -385,11 +455,6 @@ fn cmd_ls(args: &[u8], cwd: &[u8]) {
 
     let bytes_returned = ret as usize;
     let count = bytes_returned / ENTRY_SIZE;
-
-    if count == 0 {
-        print("(empty)\n");
-        return;
-    }
 
     for i in 0..count {
         let offset = i * ENTRY_SIZE;

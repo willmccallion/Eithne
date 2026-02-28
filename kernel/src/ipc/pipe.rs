@@ -181,7 +181,7 @@ pub fn pipe_read(id: PipeId, buf: &mut [u8]) -> Result<usize, SyscallError> {
         // The condition closure runs with the scheduler's IrqSpinlock held
         // (interrupts disabled). Acquiring the PIPES lock inside is safe
         // because the lock ordering is scheduler → PIPES.
-        sched::block_current_if(|| {
+        sched::block_current_if_interruptible(|| {
             let table = match PIPES.get() {
                 Some(t) => t,
                 None => return false,
@@ -191,8 +191,8 @@ pub fn pipe_read(id: PipeId, buf: &mut [u8]) -> Result<usize, SyscallError> {
                 Some(p) => p.count == 0 && p.writers > 0,
                 None => false, // pipe gone, don't block
             }
-        });
-        // Woken — loop back and re-try the read.
+        })?;
+        // Woken — loop back and re-try the read (or return EINTR).
     }
 }
 
@@ -212,8 +212,11 @@ pub fn pipe_write(id: PipeId, buf: &[u8]) -> Result<usize, SyscallError> {
                 .get_mut(&id.0)
                 .ok_or(SyscallError::InvalidArgument)?;
 
-            // No readers — broken pipe.
+            // No readers — broken pipe. Send SIGPIPE to the writer.
             if pipe.readers == 0 {
+                if let Some(my_tid) = sched::current_task_id() {
+                    sched::send_signal_to(my_tid, crate::ipc::signal::SIGPIPE);
+                }
                 return Err(SyscallError::BrokenPipe);
             }
 
@@ -236,7 +239,7 @@ pub fn pipe_write(id: PipeId, buf: &[u8]) -> Result<usize, SyscallError> {
         // PIPES lock dropped.
 
         // Phase 2: Block until space is available.
-        sched::block_current_if(|| {
+        sched::block_current_if_interruptible(|| {
             let table = match PIPES.get() {
                 Some(t) => t,
                 None => return false,
@@ -246,7 +249,7 @@ pub fn pipe_write(id: PipeId, buf: &[u8]) -> Result<usize, SyscallError> {
                 Some(p) => p.count >= PIPE_BUF_SIZE && p.readers > 0,
                 None => false,
             }
-        });
+        })?;
     }
 
     Ok(written)

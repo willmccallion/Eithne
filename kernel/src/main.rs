@@ -225,6 +225,9 @@ fn kernel_main(
     // 10. Pipe subsystem.
     ipc::pipe::init();
 
+    // 11. Signal subsystem.
+    ipc::signal::init();
+
     sched::spawn("idle", idle_task);
 
     // 11. User-mode init process from ELF.

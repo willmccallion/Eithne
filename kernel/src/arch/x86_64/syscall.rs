@@ -264,6 +264,7 @@ pub struct SyscallFrame {
 
 const EPERM: u64 = 1;
 const ENOENT: u64 = 2;
+const EINTR: u64 = 4;
 const EIO: u64 = 5;
 const ECHILD: u64 = 10;
 const EAGAIN: u64 = 11;
@@ -291,23 +292,33 @@ fn syscall_error_to_errno(e: crate::syscall::traits::SyscallError) -> u64 {
         SyscallError::NotADirectory => ENOTDIR,
         SyscallError::NoChildren => ECHILD,
         SyscallError::BrokenPipe => EPIPE,
+        SyscallError::Interrupted => EINTR,
     }
 }
 
 #[unsafe(no_mangle)]
 extern "C" fn syscall_dispatch(frame: &mut SyscallFrame) {
-    use crate::syscall::table::{SYS_EXECVE, SYS_FORK};
+    use crate::syscall::table::{SYS_EXECVE, SYS_FORK, SYS_SIGRETURN};
 
     let num = frame.rax as usize;
 
-    // Fork and exec need direct access to the frame — handle before generic dispatch.
+    // These syscalls need direct access to the frame — handle before generic dispatch.
     match num {
         SYS_FORK => {
             frame.rax = do_fork(frame);
+            crate::ipc::signal::deliver_pending_signal(frame);
             return;
         }
         SYS_EXECVE => {
             do_exec(frame);
+            // After exec, signal delivery will happen on next return.
+            return;
+        }
+        SYS_SIGRETURN => {
+            crate::ipc::signal::do_sigreturn(frame);
+            // do_sigreturn restores the full frame (including RAX), so
+            // we must NOT overwrite RAX. It also calls deliver_pending_signal
+            // internally after restoring the signal mask.
             return;
         }
         _ => {}
@@ -328,6 +339,9 @@ extern "C" fn syscall_dispatch(frame: &mut SyscallFrame) {
         Ok(val) => val as u64,
         Err(e) => syscall_error_to_errno(e).wrapping_neg(),
     };
+
+    // Check for pending signals before returning to user space.
+    crate::ipc::signal::deliver_pending_signal(frame);
 }
 
 // ---------------------------------------------------------------------------
@@ -373,10 +387,17 @@ fn do_fork(parent_frame: &SyscallFrame) -> u64 {
             None => crate::sched::fd::FdTable::new_with_stdio(),
         };
 
-        Ok((parent_id, aspace, fdt))
+        // Clone signal state (inherit dispositions and blocked mask, clear pending).
+        let sig_state = cur.signals.as_ref().map(|s| {
+            let mut cloned = s.clone();
+            cloned.pending = 0; // child starts with no pending signals
+            cloned
+        });
+
+        Ok((parent_id, aspace, fdt, sig_state))
     });
 
-    let (parent_id, child_aspace, child_fdt) = match result {
+    let (parent_id, child_aspace, child_fdt, child_signals) = match result {
         Some(Ok(v)) => v,
         Some(Err(e)) => return e.wrapping_neg(),
         None => return ENOMEM.wrapping_neg(),
@@ -440,6 +461,7 @@ fn do_fork(parent_frame: &SyscallFrame) -> u64 {
         fd_table: Some(child_fdt),
         parent: Some(parent_id),
         exit_code: None,
+        signals: child_signals,
     };
 
     crate::sched::add_task(child_task);
@@ -508,6 +530,17 @@ fn do_exec(frame: &mut SyscallFrame) {
 
             // Replace address space (old one is dropped, freeing pages).
             task.aspace = Some(loaded.aspace);
+
+            // POSIX exec: reset caught signals to SIG_DFL, clear pending.
+            // SIG_IGN dispositions are preserved across exec.
+            if let Some(ref mut sig) = task.signals {
+                for action in sig.actions.iter_mut() {
+                    if let crate::ipc::signal::SigAction::Handler(_) = *action {
+                        *action = crate::ipc::signal::SigAction::Default;
+                    }
+                }
+                sig.pending = 0;
+            }
 
             Ok(fds)
         });

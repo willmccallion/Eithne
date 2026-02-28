@@ -18,6 +18,7 @@ pub enum SyscallError {
     NotADirectory,
     NoChildren,
     BrokenPipe,
+    Interrupted,
 }
 
 impl From<FsError> for SyscallError {

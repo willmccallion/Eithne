@@ -32,6 +32,9 @@ pub fn dispatch(num: usize, args: &[usize; 6]) -> SyscallResult {
         SYS_MKDIR => sys_mkdir(args),
         SYS_UNLINK => sys_unlink(args),
         SYS_READDIR => sys_readdir(args),
+        SYS_KILL => sys_kill(args),
+        SYS_SIGACTION => sys_sigaction(args),
+        SYS_SIGPROCMASK => sys_sigprocmask(args),
         _ => Err(SyscallError::InvalidSyscall),
     }
 }
@@ -103,14 +106,14 @@ fn default_stdin_read(ptr: *mut u8, len: usize) -> SyscallResult {
         }
         let my_tid = crate::sched::current_task_id().unwrap_or(crate::sched::TaskId(0));
         crate::drivers::serial::SERIAL_READER_TID.store(my_tid.0, Ordering::Release);
-        crate::sched::block_current_if(|| {
+        crate::sched::block_current_if_interruptible(|| {
             if crate::drivers::serial::is_empty() {
                 true
             } else {
                 crate::drivers::serial::SERIAL_READER_TID.store(0, Ordering::Release);
                 false
             }
-        });
+        })?;
     }
 }
 
@@ -512,4 +515,150 @@ fn sys_wait4(args: &[usize; 6]) -> SyscallResult {
     }
 
     Ok(pid as usize)
+}
+
+// ---------------------------------------------------------------------------
+// sys_kill(pid, sig) -> 0
+// ---------------------------------------------------------------------------
+
+fn sys_kill(args: &[usize; 6]) -> SyscallResult {
+    let pid = args[0] as u64;
+    let sig = args[1] as u8;
+
+    if sig == 0 || (sig as usize) >= crate::ipc::signal::NSIG {
+        return Err(SyscallError::InvalidArgument);
+    }
+
+    let tid = crate::sched::traits::TaskId(pid);
+    if crate::sched::send_signal_to(tid, sig) {
+        Ok(0)
+    } else {
+        Err(SyscallError::NotFound)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// sys_sigaction(sig, new_act_ptr, old_act_ptr) -> 0
+// ---------------------------------------------------------------------------
+
+fn sys_sigaction(args: &[usize; 6]) -> SyscallResult {
+    use crate::ipc::signal::{NSIG, SIG_DFL, SIG_IGN, SIGKILL, SigAction, SigActionUser};
+
+    let sig = args[0] as u8;
+    let new_ptr = args[1];
+    let old_ptr = args[2];
+
+    // Validate signal number.
+    if sig == 0 || (sig as usize) >= NSIG {
+        return Err(SyscallError::InvalidArgument);
+    }
+    // Cannot change disposition of SIGKILL.
+    if sig == SIGKILL {
+        return Err(SyscallError::InvalidArgument);
+    }
+
+    // Read the new action from user space (if provided).
+    let new_action = if new_ptr != 0 {
+        validate_user_ptr(new_ptr)?;
+        let user_act = unsafe { &*(new_ptr as *const SigActionUser) };
+        Some(match user_act.handler {
+            SIG_DFL => SigAction::Default,
+            SIG_IGN => SigAction::Ignore,
+            addr => SigAction::Handler(addr),
+        })
+    } else {
+        None
+    };
+
+    // Under scheduler lock: swap action.
+    let old_action = crate::sched::with_current_task(|task| {
+        let sig_state = task.signals.as_mut().ok_or(SyscallError::InvalidArgument)?;
+
+        let old = sig_state.actions[sig as usize];
+
+        if let Some(new) = new_action {
+            sig_state.actions[sig as usize] = new;
+        }
+
+        Ok(old)
+    })?;
+
+    // Write old action to user space (if requested).
+    if old_ptr != 0 {
+        validate_user_ptr(old_ptr)?;
+        let (handler, mask) = match old_action {
+            SigAction::Default => (SIG_DFL, 0u32),
+            SigAction::Ignore => (SIG_IGN, 0u32),
+            SigAction::Handler(addr) => (addr, 0u32),
+        };
+        let dst = old_ptr as *mut SigActionUser;
+        unsafe {
+            (*dst).handler = handler;
+            (*dst).flags = 0;
+            (*dst).mask = mask;
+            (*dst)._pad = 0;
+        }
+    }
+
+    Ok(0)
+}
+
+// ---------------------------------------------------------------------------
+// sys_sigprocmask(how, set_ptr, oldset_ptr) -> 0
+// ---------------------------------------------------------------------------
+
+/// sigprocmask `how` values (Linux-compatible).
+const SIG_BLOCK: usize = 0;
+const SIG_UNBLOCK: usize = 1;
+const SIG_SETMASK: usize = 2;
+
+fn sys_sigprocmask(args: &[usize; 6]) -> SyscallResult {
+    use crate::ipc::signal::{SIGKILL, SignalState};
+
+    let how = args[0];
+    let set_ptr = args[1];
+    let oldset_ptr = args[2];
+
+    if how > SIG_SETMASK {
+        return Err(SyscallError::InvalidArgument);
+    }
+
+    // Read the new mask from user space (if provided).
+    let new_mask_val = if set_ptr != 0 {
+        validate_user_ptr(set_ptr)?;
+        Some(unsafe { *(set_ptr as *const u32) })
+    } else {
+        None
+    };
+
+    // Under scheduler lock: read old mask, apply new mask.
+    let old_mask = crate::sched::with_current_task(|task| {
+        let sig_state = task.signals.as_mut().ok_or(SyscallError::InvalidArgument)?;
+
+        let old = sig_state.blocked;
+
+        if let Some(set) = new_mask_val {
+            // SIGKILL can never be blocked.
+            let kill_bit = SignalState::sig_bit(SIGKILL);
+
+            match how {
+                SIG_BLOCK => sig_state.blocked |= set & !kill_bit,
+                SIG_UNBLOCK => sig_state.blocked &= !set,
+                SIG_SETMASK => sig_state.blocked = set & !kill_bit,
+                _ => {}
+            }
+        }
+
+        Ok(old)
+    })?;
+
+    // Write old mask to user space (if requested).
+    if oldset_ptr != 0 {
+        validate_user_ptr(oldset_ptr)?;
+        unsafe {
+            *(oldset_ptr as *mut u32) = old_mask;
+        }
+    }
+
+    Ok(0)
 }

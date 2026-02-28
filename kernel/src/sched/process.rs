@@ -27,6 +27,8 @@ pub struct Task {
     pub parent: Option<TaskId>,
     /// Exit code set by sys_exit; used to build wait status.
     pub exit_code: Option<i32>,
+    /// Per-task signal state. None for kernel threads.
+    pub signals: Option<crate::ipc::signal::SignalState>,
 }
 
 impl Task {
@@ -46,6 +48,7 @@ impl Task {
             fd_table: None,
             parent: None,
             exit_code: None,
+            signals: None,
         })
     }
 }

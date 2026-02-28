@@ -9,6 +9,9 @@ use core::sync::atomic::{AtomicBool, Ordering};
 /// Shift key state — set on make, cleared on break.
 static SHIFT_HELD: AtomicBool = AtomicBool::new(false);
 
+/// Ctrl key state — set on make, cleared on break.
+static CTRL_HELD: AtomicBool = AtomicBool::new(false);
+
 /// Alt key state — when held, keystrokes are suppressed so the window
 /// manager (e.g. Hyprland) can handle Alt+key combos.
 static ALT_HELD: AtomicBool = AtomicBool::new(false);
@@ -47,6 +50,13 @@ const RSHIFT_MAKE: u8 = 0x36;
 const LSHIFT_BREAK: u8 = 0xAA;
 const RSHIFT_BREAK: u8 = 0xB6;
 
+/// Left Ctrl make and break codes.
+const LCTRL_MAKE: u8 = 0x1D;
+const LCTRL_BREAK: u8 = 0x9D;
+
+/// Scancode for 'C' key (make).
+const KEY_C: u8 = 0x2E;
+
 /// Left Alt make and break codes.
 const LALT_MAKE: u8 = 0x38;
 const LALT_BREAK: u8 = 0xB8;
@@ -64,6 +74,14 @@ pub fn handle_scancode(scancode: u8) {
         }
         LSHIFT_BREAK | RSHIFT_BREAK => {
             SHIFT_HELD.store(false, Ordering::Relaxed);
+            return;
+        }
+        LCTRL_MAKE => {
+            CTRL_HELD.store(true, Ordering::Relaxed);
+            return;
+        }
+        LCTRL_BREAK => {
+            CTRL_HELD.store(false, Ordering::Relaxed);
             return;
         }
         LALT_MAKE => {
@@ -98,6 +116,18 @@ pub fn handle_scancode(scancode: u8) {
     } else {
         &SCANCODE_MAP
     };
+
+    // Ctrl+C: send SIGINT to the task currently reading from stdin.
+    if CTRL_HELD.load(Ordering::Relaxed) && scancode == KEY_C {
+        let tid = crate::drivers::serial::SERIAL_READER_TID.load(Ordering::Acquire);
+        if tid != 0 {
+            crate::sched::send_signal_to(
+                crate::sched::traits::TaskId(tid),
+                crate::ipc::signal::SIGINT,
+            );
+        }
+        return;
+    }
 
     let ascii = map[idx];
     if ascii != 0 {

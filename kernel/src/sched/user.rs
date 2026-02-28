@@ -104,5 +104,6 @@ pub fn create_user_task_from_elf(id: TaskId, name: &'static str, elf_data: &[u8]
         fd_table: Some(super::fd::FdTable::new_with_stdio()),
         parent: None,
         exit_code: None,
+        signals: Some(crate::ipc::signal::SignalState::new()),
     })
 }

@@ -294,6 +294,16 @@ impl RoundRobinScheduler {
         }
     }
 
+    /// Find any task by ID (current or queued) and return a mutable reference.
+    pub fn find_task_mut(&mut self, id: TaskId) -> Option<&mut Task> {
+        if let Some(ref mut cur) = self.current {
+            if cur.id == id {
+                return Some(cur);
+            }
+        }
+        self.queue.iter_mut().find(|t| t.id == id)
+    }
+
     /// Mutable access to the current task (used by fork/exec).
     pub fn current_task_mut(&mut self) -> Option<&mut Task> {
         self.current.as_mut()

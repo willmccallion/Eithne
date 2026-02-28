@@ -19,8 +19,11 @@ const SYS_EXIT: usize = 60;
 const SYS_WAIT4: usize = 61;
 const SYS_MKDIR: usize = 83;
 const SYS_UNLINK: usize = 87;
+const SYS_SIGACTION: usize = 13;
+const SYS_SIGPROCMASK: usize = 14;
 const SYS_PIPE: usize = 22;
 const SYS_DUP2: usize = 33;
+const SYS_KILL: usize = 62;
 const SYS_READDIR: usize = 217;
 
 // Linux O_* flags.
@@ -178,6 +181,40 @@ pub fn sys_pipe(fds: &mut [i32; 2]) -> isize {
 pub fn sys_dup2(old_fd: usize, new_fd: usize) -> isize {
     unsafe { syscall2(SYS_DUP2, old_fd, new_fd) }
 }
+
+/// Send a signal to a process.
+pub fn sys_kill(pid: usize, sig: usize) -> isize {
+    unsafe { syscall2(SYS_KILL, pid, sig) }
+}
+
+/// Register a signal handler.
+pub fn sys_sigaction(sig: usize, new_act: usize, old_act: usize) -> isize {
+    unsafe { syscall3(SYS_SIGACTION, sig, new_act, old_act) }
+}
+
+/// Modify the signal mask.
+pub fn sys_sigprocmask(how: usize, set: usize, oldset: usize) -> isize {
+    unsafe { syscall3(SYS_SIGPROCMASK, how, set, oldset) }
+}
+
+// Signal constants.
+pub const SIGINT: usize = 2;
+pub const SIGPIPE: usize = 13;
+pub const SIGTERM: usize = 15;
+
+/// User-space sigaction struct (must match kernel's SigActionUser layout).
+#[repr(C)]
+pub struct SigActionUser {
+    pub handler: u64,
+    pub flags: u64,
+    pub mask: u32,
+    pub _pad: u32,
+}
+
+/// SIG_DFL sentinel.
+pub const SIG_DFL: u64 = 0;
+/// SIG_IGN sentinel.
+pub const SIG_IGN: u64 = 1;
 
 // ---------------------------------------------------------------------------
 // Types matching kernel structs

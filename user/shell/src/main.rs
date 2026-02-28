@@ -19,8 +19,8 @@ const CLR_BLUE: &str = "\x1b[1;34m";
 const CLR_CYAN: &str = "\x1b[1;36m";
 
 const COMMANDS: &[&[u8]] = &[
-    b"cat", b"cd", b"clear", b"echo", b"exit", b"help", b"ls", b"mkdir", b"pwd", b"rm", b"run",
-    b"stat", b"write",
+    b"cat", b"cd", b"clear", b"echo", b"exit", b"help", b"kill", b"ls", b"mkdir", b"pwd", b"rm",
+    b"run", b"stat", b"write",
 ];
 
 // ---------------------------------------------------------------------------
@@ -35,6 +35,17 @@ extern "C" fn _start() -> ! {
 
 #[unsafe(no_mangle)]
 extern "C" fn main() -> ! {
+    // Ignore SIGINT so Ctrl+C kills foreground children but not the shell.
+    let ign_act = SigActionUser {
+        handler: SIG_IGN,
+        flags: 0,
+        mask: 0,
+        _pad: 0,
+    };
+    sys_sigaction(SIGINT, &ign_act as *const SigActionUser as usize, 0);
+    // Also ignore SIGPIPE for the shell itself.
+    sys_sigaction(SIGPIPE, &ign_act as *const SigActionUser as usize, 0);
+
     print(CLR_CYAN);
     print("eithne");
     print(CLR_RESET);
@@ -134,12 +145,22 @@ fn print_error(msg: &str, errno: isize) {
 // Line reading
 // ---------------------------------------------------------------------------
 
+/// Negative errno returned by sys_read when interrupted by a signal.
+const NEG_EINTR: isize = -4;
+
 fn read_line(buf: &mut [u8; LINE_MAX], cwd: &[u8]) -> usize {
     let mut len: usize = 0;
     let mut ch = [0u8; 1];
 
     loop {
         let n = sys_read(STDIN, &mut ch);
+        if n == NEG_EINTR {
+            // Ctrl+C: discard current input, print ^C, re-show prompt.
+            print("^C\n");
+            print_prompt(cwd);
+            len = 0;
+            continue;
+        }
         if n <= 0 {
             continue;
         }
@@ -346,6 +367,7 @@ fn dispatch_command(input: &[u8], cwd: &mut [u8; 256], cwd_len: &mut usize) {
         b"pwd" => cmd_pwd(&cwd[..*cwd_len]),
         b"clear" => cmd_clear(),
         b"exit" => cmd_exit(args),
+        b"kill" => cmd_kill(args),
         b"run" => cmd_run(args, &cwd[..*cwd_len]),
         _ => {
             print(CLR_RED);
@@ -455,6 +477,11 @@ fn cmd_help() {
     print("exit");
     print(CLR_RESET);
     print(" [code]       exit shell\n");
+    print("  ");
+    print(CLR_BOLD);
+    print("kill");
+    print(CLR_RESET);
+    print(" <pid> [sig]   send signal to process\n");
     print("  ");
     print(CLR_BOLD);
     print("run");
@@ -676,6 +703,16 @@ fn wexitstatus(status: i32) -> i32 {
     (status >> WAIT_STATUS_CODE_SHIFT) & WAIT_STATUS_CODE_MASK
 }
 
+/// Returns true if the child was killed by a signal.
+fn wifsignaled(status: i32) -> bool {
+    (status & WAIT_STATUS_SIGNAL_MASK) != 0
+}
+
+/// Extract the signal number from a signal-killed wait status.
+fn wtermsig(status: i32) -> i32 {
+    status & WAIT_STATUS_SIGNAL_MASK
+}
+
 /// Exit code used when exec fails (standard Unix convention).
 const EXEC_FAILURE_EXIT_CODE: usize = 127;
 
@@ -722,6 +759,15 @@ fn cmd_pipeline(input: &[u8], cwd: &[u8]) {
         if pid == 0 {
             // ---- Child process for stage i ----
 
+            // Reset SIGINT to default (shell had SIG_IGN).
+            let dfl_act = SigActionUser {
+                handler: SIG_DFL,
+                flags: 0,
+                mask: 0,
+                _pad: 0,
+            };
+            sys_sigaction(SIGINT, &dfl_act as *const SigActionUser as usize, 0);
+
             // Wire up stdin from previous pipe's read end (except first stage).
             if i > 0 {
                 sys_dup2(pipes[i - 1][0] as usize, STDIN);
@@ -758,12 +804,18 @@ fn cmd_pipeline(input: &[u8], cwd: &[u8]) {
         sys_close(pipes[j][1] as usize);
     }
 
-    // Wait for all children.
+    // Wait for all children, retrying on EINTR.
     if fork_ok {
         for i in 0..n {
             if pids[i] > 0 {
                 let mut status: i32 = 0;
-                sys_waitpid(pids[i] as usize, &mut status);
+                loop {
+                    let ret = sys_waitpid(pids[i] as usize, &mut status);
+                    if ret == -(4 as isize) {
+                        continue; // EINTR
+                    }
+                    break;
+                }
             }
         }
     }
@@ -881,6 +933,36 @@ fn cat_stdin() {
 }
 
 // ---------------------------------------------------------------------------
+// kill <pid> [signal]
+// ---------------------------------------------------------------------------
+
+fn cmd_kill(args: &[u8]) {
+    if args.is_empty() {
+        println("usage: kill <pid> [signal]");
+        return;
+    }
+
+    let (pid_str, rest) = split_first(args);
+    let pid = parse_usize(pid_str);
+
+    // Default signal is SIGTERM (15).
+    let sig = if rest.is_empty() {
+        SIGTERM
+    } else {
+        let (sig_str, _) = split_first(rest);
+        parse_usize(sig_str)
+    };
+
+    let ret = sys_kill(pid, sig);
+    if ret < 0 {
+        print(CLR_RED);
+        print("error");
+        print(CLR_RESET);
+        print(": kill failed\n");
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Run external program (fork + exec + wait)
 // ---------------------------------------------------------------------------
 
@@ -895,24 +977,49 @@ fn cmd_run(args: &[u8], cwd: &[u8]) {
 
     let pid = sys_fork();
     if pid == 0 {
-        // Child: replace with the new program.
+        // Child: reset SIGINT to default (shell had SIG_IGN).
+        let dfl_act = SigActionUser {
+            handler: SIG_DFL,
+            flags: 0,
+            mask: 0,
+            _pad: 0,
+        };
+        sys_sigaction(SIGINT, &dfl_act as *const SigActionUser as usize, 0);
+
+        // Replace with the new program.
         let ret = sys_exec(path);
         // exec only returns on failure.
         print_error("exec", ret);
         sys_exit(EXEC_FAILURE_EXIT_CODE);
     } else if pid > 0 {
-        // Parent: wait for child.
+        // Parent: wait for child, retrying on EINTR.
         let mut status: i32 = 0;
-        let ret = sys_waitpid(pid as usize, &mut status);
-        if ret < 0 {
-            print_error("waitpid", ret);
-        } else if wifexited(status) {
-            let code = wexitstatus(status);
-            if code != 0 {
-                print("child exited with code ");
-                print_isize(code as isize);
-                print("\n");
+        loop {
+            let ret = sys_waitpid(pid as usize, &mut status);
+            if ret == -(4 as isize) {
+                // EINTR — interrupted by signal, retry.
+                continue;
             }
+            if ret < 0 {
+                print_error("waitpid", ret);
+            } else if wifsignaled(status) {
+                let sig = wtermsig(status);
+                if sig == SIGINT as i32 {
+                    print("\n"); // newline after ^C
+                } else {
+                    print("killed by signal ");
+                    print_isize(sig as isize);
+                    print("\n");
+                }
+            } else if wifexited(status) {
+                let code = wexitstatus(status);
+                if code != 0 {
+                    print("child exited with code ");
+                    print_isize(code as isize);
+                    print("\n");
+                }
+            }
+            break;
         }
     } else {
         print_error("fork", pid);

@@ -60,8 +60,25 @@ pub fn init() {
     SERIAL_INPUT.call_once(|| IrqSpinlock::new(InputBuffer::new()));
 }
 
-/// Push a byte into the input buffer. Called from the IRQ4 handler.
+/// ASCII ETX — sent by the terminal when the user presses Ctrl+C.
+const CTRL_C: u8 = 0x03;
+
+/// Push a byte into the input buffer. Called from the IRQ handler and
+/// the PS/2 keyboard driver.
+///
+/// If the byte is Ctrl+C (0x03), sends SIGINT to the task currently
+/// blocked on serial read instead of buffering the byte.
 pub fn push_byte(byte: u8) {
+    if byte == CTRL_C {
+        let tid = SERIAL_READER_TID.load(Ordering::Acquire);
+        if tid != 0 {
+            crate::sched::send_signal_to(
+                crate::sched::traits::TaskId(tid),
+                crate::ipc::signal::SIGINT,
+            );
+        }
+        return;
+    }
     if let Some(buf) = SERIAL_INPUT.get() {
         buf.lock().push(byte);
     }

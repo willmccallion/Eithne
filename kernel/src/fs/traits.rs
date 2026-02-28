@@ -93,6 +93,13 @@ pub trait FileSystem {
     /// Close an open file handle.
     fn close(&self, handle: FileHandle) -> Result<(), FsError>;
 
+    /// Duplicate an open file handle.
+    ///
+    /// Creates a new independent handle pointing to the same file with the
+    /// same flags. The new handle has its own cursor position (copied from
+    /// the original at the time of the dup).
+    fn dup(&self, handle: FileHandle) -> Result<FileHandle, FsError>;
+
     /// Get file metadata.
     fn stat(&self, path: &str) -> Result<FileStat, FsError>;
 

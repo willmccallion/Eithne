@@ -141,6 +141,24 @@ impl Vfs {
         inner.mounts[entry.mount_idx].fs.close(entry.fs_handle)
     }
 
+    fn dup(&self, handle: FileHandle) -> Result<FileHandle, FsError> {
+        let mut inner = self.inner.lock();
+        let entry = inner.open_files.get(&handle.0).ok_or(FsError::NotFound)?;
+        let mount_idx = entry.mount_idx;
+        let new_fs_handle = inner.mounts[mount_idx].fs.dup(entry.fs_handle)?;
+
+        let new_vfs_handle = inner.next_handle;
+        inner.next_handle += 1;
+        inner.open_files.insert(
+            new_vfs_handle,
+            VfsOpenFile {
+                mount_idx,
+                fs_handle: new_fs_handle,
+            },
+        );
+        Ok(FileHandle(new_vfs_handle))
+    }
+
     fn stat(&self, path: &str) -> Result<FileStat, FsError> {
         let inner = self.inner.lock();
         let (_idx, fs, rel_path) = inner.resolve_mount(path)?;
@@ -195,6 +213,10 @@ pub fn write(handle: FileHandle, buf: &[u8]) -> Result<usize, FsError> {
 
 pub fn close(handle: FileHandle) -> Result<(), FsError> {
     VFS.get().ok_or(FsError::IoError)?.close(handle)
+}
+
+pub fn dup(handle: FileHandle) -> Result<FileHandle, FsError> {
+    VFS.get().ok_or(FsError::IoError)?.dup(handle)
 }
 
 pub fn stat(path: &str) -> Result<FileStat, FsError> {

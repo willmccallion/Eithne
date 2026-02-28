@@ -105,5 +105,6 @@ pub fn create_user_task_from_elf(id: TaskId, name: &'static str, elf_data: &[u8]
         parent: None,
         exit_code: None,
         signals: Some(crate::ipc::signal::SignalState::new()),
+        cwd: Some(alloc::string::String::from("/")),
     })
 }

@@ -1,3 +1,6 @@
+extern crate alloc;
+use alloc::string::String;
+
 use super::context::TaskStack;
 use super::traits::TaskId;
 
@@ -29,6 +32,8 @@ pub struct Task {
     pub exit_code: Option<i32>,
     /// Per-task signal state. None for kernel threads.
     pub signals: Option<crate::ipc::signal::SignalState>,
+    /// Current working directory. None for kernel threads.
+    pub cwd: Option<String>,
 }
 
 impl Task {
@@ -49,6 +54,7 @@ impl Task {
             parent: None,
             exit_code: None,
             signals: None,
+            cwd: None,
         })
     }
 }

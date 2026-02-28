@@ -23,7 +23,11 @@ const SYS_SIGACTION: usize = 13;
 const SYS_SIGPROCMASK: usize = 14;
 const SYS_PIPE: usize = 22;
 const SYS_DUP2: usize = 33;
+const SYS_GETPID: usize = 39;
 const SYS_KILL: usize = 62;
+const SYS_GETCWD: usize = 79;
+const SYS_CHDIR: usize = 80;
+const SYS_GETPPID: usize = 110;
 const SYS_READDIR: usize = 217;
 
 // Linux O_* flags.
@@ -31,6 +35,7 @@ pub const O_RDONLY: usize = 0;
 pub const O_WRONLY: usize = 1;
 pub const O_CREAT: usize = 0x40;
 pub const O_TRUNC: usize = 0x200;
+pub const O_APPEND: usize = 0x400;
 
 /// Linux directory entry type for directories.
 pub const DT_DIR: u8 = 4;
@@ -161,8 +166,14 @@ pub fn sys_fork() -> isize {
     unsafe { syscall0(SYS_FORK) }
 }
 
-pub fn sys_exec(path: &str) -> isize {
-    with_cstr(path, |ptr| unsafe { syscall1(SYS_EXECVE, ptr as usize) })
+/// Execute a program, replacing the current process image.
+///
+/// `argv` must be a NULL-terminated array of pointers to NUL-terminated strings.
+/// Pass `core::ptr::null()` for no arguments.
+pub fn sys_exec(path: &str, argv: *const *const u8) -> isize {
+    with_cstr(path, |ptr| unsafe {
+        syscall2(SYS_EXECVE, ptr as usize, argv as usize)
+    })
 }
 
 /// Wait for a child process.
@@ -195,6 +206,29 @@ pub fn sys_sigaction(sig: usize, new_act: usize, old_act: usize) -> isize {
 /// Modify the signal mask.
 pub fn sys_sigprocmask(how: usize, set: usize, oldset: usize) -> isize {
     unsafe { syscall3(SYS_SIGPROCMASK, how, set, oldset) }
+}
+
+/// Get the current process ID.
+pub fn sys_getpid() -> isize {
+    unsafe { syscall0(SYS_GETPID) }
+}
+
+/// Get the parent process ID.
+pub fn sys_getppid() -> isize {
+    unsafe { syscall0(SYS_GETPPID) }
+}
+
+/// Get the current working directory.
+///
+/// Writes the NUL-terminated path into `buf`. Returns the number of bytes
+/// written (including the NUL terminator) on success, or a negative errno.
+pub fn sys_getcwd(buf: &mut [u8]) -> isize {
+    unsafe { syscall2(SYS_GETCWD, buf.as_mut_ptr() as usize, buf.len()) }
+}
+
+/// Change the current working directory.
+pub fn sys_chdir(path: &str) -> isize {
+    with_cstr(path, |ptr| unsafe { syscall1(SYS_CHDIR, ptr as usize) })
 }
 
 // Signal constants.

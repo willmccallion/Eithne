@@ -394,10 +394,13 @@ fn do_fork(parent_frame: &SyscallFrame) -> u64 {
             cloned
         });
 
-        Ok((parent_id, aspace, fdt, sig_state))
+        // Clone cwd.
+        let child_cwd = cur.cwd.clone();
+
+        Ok((parent_id, aspace, fdt, sig_state, child_cwd))
     });
 
-    let (parent_id, child_aspace, child_fdt, child_signals) = match result {
+    let (parent_id, child_aspace, child_fdt, child_signals, child_cwd) = match result {
         Some(Ok(v)) => v,
         Some(Err(e)) => return e.wrapping_neg(),
         None => return ENOMEM.wrapping_neg(),
@@ -462,6 +465,7 @@ fn do_fork(parent_frame: &SyscallFrame) -> u64 {
         parent: Some(parent_id),
         exit_code: None,
         signals: child_signals,
+        cwd: child_cwd,
     };
 
     crate::sched::add_task(child_task);
@@ -471,8 +475,110 @@ fn do_fork(parent_frame: &SyscallFrame) -> u64 {
 }
 
 // ---------------------------------------------------------------------------
-// exec(path)
+// exec(path, argv)
 // ---------------------------------------------------------------------------
+
+/// Maximum number of arguments passed to exec.
+const ARGV_MAX: usize = 64;
+/// Maximum length of a single argument string.
+const ARG_LEN_MAX: usize = 4096;
+
+/// Copy a NULL-terminated argv array from user space.
+///
+/// Each entry is a pointer to a NUL-terminated C string. The array itself
+/// is terminated by a NULL pointer. Returns an empty Vec if `argv_ptr` is 0.
+fn copy_argv_from_user(argv_ptr: usize) -> Result<alloc::vec::Vec<alloc::string::String>, u64> {
+    use alloc::string::String;
+    use alloc::vec::Vec;
+
+    /// Kernel virtual address boundary.
+    const KERNEL_SPACE: usize = 0xFFFF_8000_0000_0000;
+
+    if argv_ptr == 0 {
+        return Ok(Vec::new());
+    }
+
+    if argv_ptr >= KERNEL_SPACE {
+        return Err(EINVAL);
+    }
+
+    let mut args = Vec::new();
+    let array = argv_ptr as *const usize;
+
+    for i in 0..ARGV_MAX {
+        let entry_addr = argv_ptr + i * core::mem::size_of::<usize>();
+        if entry_addr >= KERNEL_SPACE {
+            return Err(EINVAL);
+        }
+        let str_ptr = unsafe { *((array as usize + i * 8) as *const usize) };
+        if str_ptr == 0 {
+            break;
+        }
+        match crate::syscall::dispatch::copy_path_from_user(str_ptr) {
+            Ok(s) => {
+                if s.len() > ARG_LEN_MAX {
+                    return Err(EINVAL);
+                }
+                args.push(s);
+            }
+            Err(_) => return Err(EINVAL),
+        }
+    }
+
+    Ok(args)
+}
+
+/// Marshal argv strings onto the user stack and return (new_rsp, argc, argv_ptr).
+///
+/// Layout (growing downward from stack_top):
+///   [string bytes: "prog\0", "arg1\0", ...]
+///   [padding to 8-byte alignment]
+///   [argv[0] ptr] [argv[1] ptr] ... [NULL ptr]
+///   [16-byte alignment padding]  <-- new RSP
+fn marshal_argv_on_stack(stack_top: u64, args: &[alloc::string::String]) -> (u64, usize, u64) {
+    if args.is_empty() {
+        return (stack_top, 0, 0);
+    }
+
+    let argc = args.len();
+    let mut sp = stack_top;
+
+    // Phase 1: Write string bytes (including NUL terminators) below stack_top.
+    let mut string_addrs = [0u64; ARGV_MAX];
+    for (i, arg) in args.iter().enumerate() {
+        let bytes = arg.as_bytes();
+        let len = bytes.len() + 1; // +1 for NUL
+        sp -= len as u64;
+        let dst = sp as *mut u8;
+        unsafe {
+            core::ptr::copy_nonoverlapping(bytes.as_ptr(), dst, bytes.len());
+            *dst.add(bytes.len()) = 0; // NUL terminator
+        }
+        string_addrs[i] = sp;
+    }
+
+    // Phase 2: Align to 8 bytes.
+    sp &= !7;
+
+    // Phase 3: Write the argv pointer array (argc + 1 entries for NULL terminator).
+    let ptrs_size = ((argc + 1) * 8) as u64;
+    sp -= ptrs_size;
+    // Align to 16 bytes (ABI requirement for RSP).
+    sp &= !15;
+
+    let argv_ptr = sp;
+    let arr = sp as *mut u64;
+    for i in 0..argc {
+        unsafe {
+            *arr.add(i) = string_addrs[i];
+        }
+    }
+    unsafe {
+        *arr.add(argc) = 0;
+    } // NULL terminator
+
+    (sp, argc, argv_ptr)
+}
 
 fn do_exec(frame: &mut SyscallFrame) {
     use crate::elf::loader;
@@ -480,12 +586,22 @@ fn do_exec(frame: &mut SyscallFrame) {
     use crate::fs::traits::OpenFlags;
 
     let path_ptr = frame.rdi as usize;
+    let argv_ptr = frame.rsi as usize;
 
-    // Copy path from user space.
+    // Copy path from user space (old address space still active).
     let path = match crate::syscall::dispatch::copy_path_from_user(path_ptr) {
         Ok(p) => p,
         Err(_) => {
             frame.rax = EINVAL.wrapping_neg();
+            return;
+        }
+    };
+
+    // Copy argv from user space (old address space still active).
+    let argv = match copy_argv_from_user(argv_ptr) {
+        Ok(a) => a,
+        Err(e) => {
+            frame.rax = e.wrapping_neg();
             return;
         }
     };
@@ -575,9 +691,12 @@ fn do_exec(frame: &mut SyscallFrame) {
         }
     }
 
+    // Marshal argv onto the new user stack (address space is now active).
+    let (new_rsp, argc, argv_user_ptr) = marshal_argv_on_stack(loaded.stack_top, &argv);
+
     // Update the frame to jump to the new entry point.
     frame.rip = loaded.entry_point;
-    frame.rsp = loaded.stack_top;
+    frame.rsp = new_rsp;
     frame.rflags = USER_RFLAGS;
     frame.cs = USER_CS;
     frame.ss = USER_DS;
@@ -586,8 +705,8 @@ fn do_exec(frame: &mut SyscallFrame) {
     frame.rbx = 0;
     frame.rcx = loaded.entry_point; // RCX = RIP for sysret path
     frame.rdx = 0;
-    frame.rsi = 0;
-    frame.rdi = 0;
+    frame.rsi = argv_user_ptr;
+    frame.rdi = argc as u64;
     frame.rbp = 0;
     frame.r8 = 0;
     frame.r9 = 0;

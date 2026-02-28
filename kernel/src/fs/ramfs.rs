@@ -205,6 +205,20 @@ impl FileSystem for RamFs {
         Ok(())
     }
 
+    fn dup(&self, handle: FileHandle) -> Result<FileHandle, FsError> {
+        let mut inner = self.inner.lock();
+        let file = inner.open_files.get(&handle.0).ok_or(FsError::NotFound)?;
+        let new_file = OpenFile {
+            ino: file.ino,
+            cursor: file.cursor,
+            flags: file.flags,
+        };
+        let new_id = inner.next_handle;
+        inner.next_handle += 1;
+        inner.open_files.insert(new_id, new_file);
+        Ok(FileHandle(new_id))
+    }
+
     fn stat(&self, path: &str) -> Result<FileStat, FsError> {
         let inner = self.inner.lock();
         let ino = inner.resolve_path(path)?;

@@ -253,8 +253,11 @@ fn kernel_main(
 fn store_init_in_vfs(elf_data: &[u8]) {
     use fs::traits::OpenFlags;
 
-    if let Err(e) = fs::vfs::mkdir("/bin") {
-        println!("[init] warning: mkdir /bin failed: {:?}", e);
+    // Create standard Unix directory hierarchy.
+    for dir in &["/bin", "/dev", "/etc", "/home", "/tmp", "/var"] {
+        if let Err(e) = fs::vfs::mkdir(dir) {
+            println!("[init] warning: mkdir {} failed: {:?}", dir, e);
+        }
     }
 
     let handle = match fs::vfs::open(

@@ -34,7 +34,7 @@ extern "C" fn _start() -> ! {
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn main() -> ! {
+extern "C" fn main(_argc: usize, _argv: *const *const u8) -> ! {
     // Ignore SIGINT so Ctrl+C kills foreground children but not the shell.
     let ign_act = SigActionUser {
         handler: SIG_IGN,
@@ -342,6 +342,156 @@ fn resolve_path(cwd: &[u8], arg: &[u8]) -> ([u8; 256], usize) {
 }
 
 // ---------------------------------------------------------------------------
+// File redirection parsing
+// ---------------------------------------------------------------------------
+
+/// Parsed redirection targets for a single command.
+struct Redirects {
+    /// File to redirect stdin from (<).
+    stdin_file: [u8; 256],
+    stdin_len: usize,
+    /// File to redirect stdout to (> or >>).
+    stdout_file: [u8; 256],
+    stdout_len: usize,
+    /// Whether stdout should be appended (>>).
+    stdout_append: bool,
+}
+
+impl Redirects {
+    const fn empty() -> Self {
+        Self {
+            stdin_file: [0u8; 256],
+            stdin_len: 0,
+            stdout_file: [0u8; 256],
+            stdout_len: 0,
+            stdout_append: false,
+        }
+    }
+
+    fn has_stdin(&self) -> bool {
+        self.stdin_len > 0
+    }
+
+    fn has_stdout(&self) -> bool {
+        self.stdout_len > 0
+    }
+}
+
+/// Parse and strip redirection tokens from a command line.
+///
+/// Scans `input` for `>`, `>>`, and `<` operators, extracts the filenames,
+/// and writes the remaining (clean) command into `clean_buf`.
+/// Returns `(clean_len, redirects)`.
+fn parse_redirects(input: &[u8], clean_buf: &mut [u8; LINE_MAX]) -> (usize, Redirects) {
+    let mut redir = Redirects::empty();
+    let mut clean_len: usize = 0;
+    let mut i: usize = 0;
+
+    while i < input.len() {
+        // Skip leading spaces in clean output.
+        if input[i] == b'>' {
+            // Check for >> (append).
+            let append = i + 1 < input.len() && input[i + 1] == b'>';
+            if append {
+                i += 2;
+            } else {
+                i += 1;
+            }
+            // Skip spaces after >/>>
+            while i < input.len() && input[i] == b' ' {
+                i += 1;
+            }
+            // Read filename.
+            let start = i;
+            while i < input.len() && input[i] != b' ' && input[i] != b'>' && input[i] != b'<' {
+                i += 1;
+            }
+            let name = &input[start..i];
+            let n = name.len().min(255);
+            redir.stdout_file[..n].copy_from_slice(&name[..n]);
+            redir.stdout_len = n;
+            redir.stdout_append = append;
+        } else if input[i] == b'<' {
+            i += 1;
+            // Skip spaces after <
+            while i < input.len() && input[i] == b' ' {
+                i += 1;
+            }
+            // Read filename.
+            let start = i;
+            while i < input.len() && input[i] != b' ' && input[i] != b'>' && input[i] != b'<' {
+                i += 1;
+            }
+            let name = &input[start..i];
+            let n = name.len().min(255);
+            redir.stdin_file[..n].copy_from_slice(&name[..n]);
+            redir.stdin_len = n;
+        } else {
+            if clean_len < LINE_MAX {
+                clean_buf[clean_len] = input[i];
+                clean_len += 1;
+            }
+            i += 1;
+        }
+    }
+
+    // Trim trailing spaces from clean buffer.
+    while clean_len > 0 && clean_buf[clean_len - 1] == b' ' {
+        clean_len -= 1;
+    }
+
+    (clean_len, redir)
+}
+
+/// Apply redirections in the current (child) process.
+/// Opens redirect files and dup2s them onto stdin/stdout.
+/// Returns true on success, false on error (prints error message).
+fn apply_redirects(redir: &Redirects, cwd: &[u8]) -> bool {
+    if redir.has_stdin() {
+        let (resolved, rlen) = resolve_path(cwd, &redir.stdin_file[..redir.stdin_len]);
+        let path = bytes_to_str(&resolved[..rlen]);
+        let fd = sys_open(path, O_RDONLY);
+        if fd < 0 {
+            print_error("redirect: open <", fd);
+            return false;
+        }
+        sys_dup2(fd as usize, STDIN);
+        sys_close(fd as usize);
+    }
+
+    if redir.has_stdout() {
+        let (resolved, rlen) = resolve_path(cwd, &redir.stdout_file[..redir.stdout_len]);
+        let path = bytes_to_str(&resolved[..rlen]);
+        let flags = if redir.stdout_append {
+            O_WRONLY | O_CREAT | O_APPEND
+        } else {
+            O_WRONLY | O_CREAT | O_TRUNC
+        };
+        let fd = sys_open(path, flags);
+        if fd < 0 {
+            print_error("redirect: open >", fd);
+            return false;
+        }
+        sys_dup2(fd as usize, STDOUT);
+        sys_close(fd as usize);
+    }
+
+    true
+}
+
+/// Check if a byte slice contains any redirection operators.
+fn has_redirects(input: &[u8]) -> bool {
+    let mut i = 0;
+    while i < input.len() {
+        if input[i] == b'>' || input[i] == b'<' {
+            return true;
+        }
+        i += 1;
+    }
+    false
+}
+
+// ---------------------------------------------------------------------------
 // Command dispatch
 // ---------------------------------------------------------------------------
 
@@ -352,6 +502,61 @@ fn dispatch_command(input: &[u8], cwd: &mut [u8; 256], cwd_len: &mut usize) {
         return;
     }
 
+    // Check for redirections — if present and not `cd`/`exit`, fork a child
+    // so we can apply redirections without affecting the shell's own fds.
+    if has_redirects(input) {
+        let mut clean_buf = [0u8; LINE_MAX];
+        let (clean_len, redir) = parse_redirects(input, &mut clean_buf);
+        let clean = &clean_buf[..clean_len];
+        let (cmd, _) = split_first(clean);
+
+        // cd and exit must run in the parent — redirect doesn't make sense for them.
+        if cmd == b"cd" || cmd == b"exit" {
+            dispatch_simple(clean, cwd, cwd_len);
+            return;
+        }
+
+        let pid = sys_fork();
+        if pid == 0 {
+            // Child: apply redirections.
+            let dfl_act = SigActionUser {
+                handler: SIG_DFL,
+                flags: 0,
+                mask: 0,
+                _pad: 0,
+            };
+            sys_sigaction(SIGINT, &dfl_act as *const SigActionUser as usize, 0);
+
+            if !apply_redirects(&redir, &cwd[..*cwd_len]) {
+                sys_exit(1);
+            }
+            // Run the command in the child.
+            run_pipeline_stage(clean, &cwd[..*cwd_len]);
+            sys_exit(0);
+        } else if pid > 0 {
+            // Parent: wait for child.
+            let mut status: i32 = 0;
+            loop {
+                let ret = sys_waitpid(pid as usize, &mut status);
+                if ret == -(4 as isize) {
+                    continue; // EINTR
+                }
+                if ret < 0 {
+                    print_error("waitpid", ret);
+                }
+                break;
+            }
+        } else {
+            print_error("fork", pid);
+        }
+        return;
+    }
+
+    dispatch_simple(input, cwd, cwd_len);
+}
+
+/// Dispatch a simple command (no redirections, no pipes).
+fn dispatch_simple(input: &[u8], cwd: &mut [u8; 256], cwd_len: &mut usize) {
     let (cmd, args) = split_first(input);
 
     match cmd {
@@ -640,23 +845,16 @@ fn cmd_cd(args: &[u8], cwd: &mut [u8; 256], cwd_len: &mut usize) {
     if args.is_empty() {
         cwd[0] = b'/';
         *cwd_len = 1;
+        sys_chdir("/");
         return;
     }
 
     let (resolved, rlen) = resolve_path(&cwd[..*cwd_len], args);
     let path = bytes_to_str(&resolved[..rlen]);
 
-    let mut st = StatBuf::zeroed();
-    let ret = sys_stat(path, &mut st);
+    let ret = sys_chdir(path);
     if ret < 0 {
         print_error("cd", ret);
-        return;
-    }
-    if !st.is_dir() {
-        print(CLR_RED);
-        print("error");
-        print(CLR_RESET);
-        print(": cd: not a directory\n");
         return;
     }
 
@@ -870,7 +1068,16 @@ fn trim(b: &[u8]) -> &[u8] {
 /// use sys_write(STDOUT, ...) / sys_read(STDIN, ...) which now go through
 /// the pipe. For `run <path>`, we exec the external program.
 fn run_pipeline_stage(stage: &[u8], cwd: &[u8]) {
-    let (cmd, args) = split_first(stage);
+    // Parse and apply any per-stage redirections (e.g., `cat < file`).
+    let mut clean_buf = [0u8; LINE_MAX];
+    let (clean_len, redir) = parse_redirects(stage, &mut clean_buf);
+    let clean = &clean_buf[..clean_len];
+
+    if has_redirects(stage) && !apply_redirects(&redir, cwd) {
+        sys_exit(1);
+    }
+
+    let (cmd, args) = split_first(clean);
 
     match cmd {
         b"echo" => {
@@ -902,9 +1109,11 @@ fn run_pipeline_stage(stage: &[u8], cwd: &[u8]) {
                 print_error("run", -22);
                 sys_exit(EXEC_FAILURE_EXIT_CODE);
             }
-            let (resolved, rlen) = resolve_path(cwd, args);
+            let (path_arg, rest) = split_first(args);
+            let (resolved, rlen) = resolve_path(cwd, path_arg);
             let path = bytes_to_str(&resolved[..rlen]);
-            let ret = sys_exec(path);
+            let argv_ptr = build_argv(path.as_bytes(), rest);
+            let ret = sys_exec(path, argv_ptr);
             print_error("exec", ret);
             sys_exit(EXEC_FAILURE_EXIT_CODE);
         }
@@ -912,7 +1121,8 @@ fn run_pipeline_stage(stage: &[u8], cwd: &[u8]) {
             // Try as an external program path.
             let (resolved, rlen) = resolve_path(cwd, cmd);
             let path = bytes_to_str(&resolved[..rlen]);
-            let ret = sys_exec(path);
+            let argv_ptr = build_argv(path.as_bytes(), args);
+            let ret = sys_exec(path, argv_ptr);
             // If exec failed, print error and exit.
             print_error("exec", ret);
             sys_exit(EXEC_FAILURE_EXIT_CODE);
@@ -963,16 +1173,82 @@ fn cmd_kill(args: &[u8]) {
 }
 
 // ---------------------------------------------------------------------------
+// Argv builder for exec
+// ---------------------------------------------------------------------------
+
+/// Maximum number of arguments for exec (including argv[0]).
+const MAX_EXEC_ARGS: usize = 64;
+
+/// Storage for NUL-terminated argument strings on the stack.
+/// Each arg gets up to 256 bytes (including NUL terminator).
+static mut ARGV_BUFS: [[u8; 256]; MAX_EXEC_ARGS] = [[0u8; 256]; MAX_EXEC_ARGS];
+/// Pointer array passed to sys_exec (NULL-terminated).
+static mut ARGV_PTRS: [*const u8; MAX_EXEC_ARGS + 1] = [core::ptr::null(); MAX_EXEC_ARGS + 1];
+
+/// Build a NULL-terminated argv array from the program path and a space-
+/// separated argument string. Returns a pointer to the argv array.
+///
+/// argv[0] is the program path.
+fn build_argv(path: &[u8], args: &[u8]) -> *const *const u8 {
+    use core::ptr::addr_of_mut;
+
+    unsafe {
+        let bufs = addr_of_mut!(ARGV_BUFS);
+        let ptrs = addr_of_mut!(ARGV_PTRS);
+        let mut argc = 0usize;
+
+        // argv[0] = program path
+        let n = path.len().min(255);
+        let buf = &mut (*bufs)[0];
+        buf[..n].copy_from_slice(&path[..n]);
+        buf[n] = 0;
+        (*ptrs)[0] = buf.as_ptr();
+        argc += 1;
+
+        // Split remaining args by spaces.
+        let mut i = 0;
+        while i < args.len() && argc < MAX_EXEC_ARGS {
+            // Skip spaces.
+            while i < args.len() && args[i] == b' ' {
+                i += 1;
+            }
+            if i >= args.len() {
+                break;
+            }
+            // Find end of this arg.
+            let start = i;
+            while i < args.len() && args[i] != b' ' {
+                i += 1;
+            }
+            let arg = &args[start..i];
+            let n = arg.len().min(255);
+            let buf = &mut (*bufs)[argc];
+            buf[..n].copy_from_slice(&arg[..n]);
+            buf[n] = 0;
+            (*ptrs)[argc] = buf.as_ptr();
+            argc += 1;
+        }
+
+        // NULL-terminate the array.
+        (*ptrs)[argc] = core::ptr::null();
+
+        (*ptrs).as_ptr()
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Run external program (fork + exec + wait)
 // ---------------------------------------------------------------------------
 
 fn cmd_run(args: &[u8], cwd: &[u8]) {
     if args.is_empty() {
-        println("usage: run <path>");
+        println("usage: run <path> [args...]");
         return;
     }
 
-    let (resolved, rlen) = resolve_path(cwd, args);
+    // Split into path and remaining arguments.
+    let (path_arg, rest) = split_first(args);
+    let (resolved, rlen) = resolve_path(cwd, path_arg);
     let path = bytes_to_str(&resolved[..rlen]);
 
     let pid = sys_fork();
@@ -986,8 +1262,11 @@ fn cmd_run(args: &[u8], cwd: &[u8]) {
         };
         sys_sigaction(SIGINT, &dfl_act as *const SigActionUser as usize, 0);
 
+        // Build argv: [path, arg1, arg2, ..., NULL]
+        let argv_ptr = build_argv(path.as_bytes(), rest);
+
         // Replace with the new program.
-        let ret = sys_exec(path);
+        let ret = sys_exec(path, argv_ptr);
         // exec only returns on failure.
         print_error("exec", ret);
         sys_exit(EXEC_FAILURE_EXIT_CODE);

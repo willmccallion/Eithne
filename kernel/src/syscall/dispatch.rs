@@ -31,6 +31,10 @@ pub fn dispatch(num: usize, args: &[usize; 6]) -> SyscallResult {
         SYS_WAIT4 => sys_wait4(args),
         SYS_MKDIR => sys_mkdir(args),
         SYS_UNLINK => sys_unlink(args),
+        SYS_GETPID => sys_getpid(),
+        SYS_GETPPID => sys_getppid(),
+        SYS_GETCWD => sys_getcwd(args),
+        SYS_CHDIR => sys_chdir(args),
         SYS_READDIR => sys_readdir(args),
         SYS_KILL => sys_kill(args),
         SYS_SIGACTION => sys_sigaction(args),
@@ -310,19 +314,28 @@ fn sys_dup2(args: &[usize; 6]) -> SyscallResult {
         return Ok(new_fd);
     }
 
-    // Under the scheduler lock: get the source kind, increment pipe refcount
-    // if needed, and place at new_fd. Return any evicted entry for cleanup.
-    let evicted = crate::sched::with_current_fd_table(|fdt| {
-        let source_kind = fdt.get_kind(old_fd)?;
-        let source_kind = source_kind.ok_or(SyscallError::InvalidArgument)?;
+    // Duplicate the underlying resource: VFS handles need a real dup
+    // (new open file entry), pipes just need a refcount bump.
+    // This must happen outside the scheduler lock for VFS (acquires VFS lock).
+    let source_kind = crate::sched::with_current_fd_table(|fdt| {
+        let kind = fdt.get_kind(old_fd)?;
+        kind.ok_or(SyscallError::InvalidArgument)
+    })?;
 
-        // Increment pipe refcount for the new reference.
-        if let FdKind::Pipe(ref h) = source_kind {
-            crate::ipc::pipe::pipe_clone(h);
+    let new_kind = match source_kind {
+        FdKind::Vfs(h) => {
+            let new_h = crate::fs::vfs::dup(h).map_err(|_| SyscallError::IoError)?;
+            FdKind::Vfs(new_h)
         }
+        FdKind::Pipe(h) => {
+            crate::ipc::pipe::pipe_clone(&h);
+            FdKind::Pipe(h)
+        }
+    };
 
-        // Place at new_fd, evicting any existing entry.
-        let old = fdt.set_fd(new_fd, source_kind);
+    // Under the scheduler lock: place the new entry at new_fd.
+    let evicted = crate::sched::with_current_fd_table(|fdt| {
+        let old = fdt.set_fd(new_fd, new_kind);
         Ok(old)
     })?;
 
@@ -480,6 +493,72 @@ fn sys_readdir(args: &[usize; 6]) -> SyscallResult {
 fn sys_exit(args: &[usize; 6]) -> SyscallResult {
     let code = args[0] as i32;
     crate::sched::exit_current_with_code(code);
+}
+
+// ---------------------------------------------------------------------------
+// sys_getpid() -> pid
+// ---------------------------------------------------------------------------
+
+fn sys_getpid() -> SyscallResult {
+    let tid = crate::sched::current_task_id().ok_or(SyscallError::IoError)?;
+    Ok(tid.0 as usize)
+}
+
+// ---------------------------------------------------------------------------
+// sys_getppid() -> parent pid
+// ---------------------------------------------------------------------------
+
+fn sys_getppid() -> SyscallResult {
+    crate::sched::with_current_task(|task| Ok(task.parent.map(|p| p.0 as usize).unwrap_or(0)))
+}
+
+// ---------------------------------------------------------------------------
+// sys_getcwd(buf_ptr, buf_len) -> bytes_written (including NUL)
+// ---------------------------------------------------------------------------
+
+fn sys_getcwd(args: &[usize; 6]) -> SyscallResult {
+    let buf_ptr = args[0];
+    let buf_len = args[1];
+
+    validate_user_ptr(buf_ptr)?;
+
+    let cwd = crate::sched::with_current_task(|task| {
+        task.cwd.clone().ok_or(SyscallError::InvalidArgument)
+    })?;
+
+    let cwd_bytes = cwd.as_bytes();
+    let needed = cwd_bytes.len() + 1; // +1 for NUL
+
+    if buf_len < needed {
+        return Err(SyscallError::InvalidArgument);
+    }
+
+    let dst = buf_ptr as *mut u8;
+    unsafe {
+        core::ptr::copy_nonoverlapping(cwd_bytes.as_ptr(), dst, cwd_bytes.len());
+        *dst.add(cwd_bytes.len()) = 0; // NUL terminator
+    }
+
+    Ok(needed)
+}
+
+// ---------------------------------------------------------------------------
+// sys_chdir(path_ptr) -> 0
+// ---------------------------------------------------------------------------
+
+fn sys_chdir(args: &[usize; 6]) -> SyscallResult {
+    let path = copy_path_from_user(args[0])?;
+
+    // Verify the path is a directory.
+    let stat = crate::fs::vfs::stat(&path)?;
+    if stat.file_type != crate::fs::traits::FileType::Directory {
+        return Err(SyscallError::NotADirectory);
+    }
+
+    crate::sched::with_current_task(|task| {
+        task.cwd = Some(path);
+        Ok(0)
+    })
 }
 
 // ---------------------------------------------------------------------------

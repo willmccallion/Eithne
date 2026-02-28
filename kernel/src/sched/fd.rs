@@ -138,17 +138,36 @@ impl FdTable {
     /// Clone the entire fd table (used by fork).
     ///
     /// For pipe entries, increments the refcount in the global pipe table.
-    /// This acquires the PIPES lock but NOT the scheduler lock, so it is
-    /// safe to call while the scheduler lock is already held.
+    /// For VFS entries, creates independent file handles via `vfs::dup`.
+    /// This acquires the PIPES / VFS locks but NOT the scheduler lock, so
+    /// it is safe to call while the scheduler lock is already held.
     pub fn clone_table(&self) -> Self {
-        let cloned = self.entries.clone();
-        // Increment pipe refcounts for each cloned pipe entry.
-        for slot in cloned.iter() {
-            if let Some(entry) = slot {
-                if let FdKind::Pipe(ref handle) = entry.kind {
-                    crate::ipc::pipe::pipe_clone(handle);
-                }
-            }
+        let mut cloned = Vec::with_capacity(self.entries.len());
+        for slot in self.entries.iter() {
+            cloned.push(match slot {
+                Some(entry) => match &entry.kind {
+                    FdKind::Pipe(handle) => {
+                        crate::ipc::pipe::pipe_clone(handle);
+                        Some(FdEntry {
+                            kind: FdKind::Pipe(handle.clone()),
+                            cloexec: entry.cloexec,
+                        })
+                    }
+                    FdKind::Vfs(handle) => {
+                        match crate::fs::vfs::dup(*handle) {
+                            Ok(new_handle) => Some(FdEntry {
+                                kind: FdKind::Vfs(new_handle),
+                                cloexec: entry.cloexec,
+                            }),
+                            Err(_) => {
+                                // Best effort: if dup fails, skip this fd.
+                                None
+                            }
+                        }
+                    }
+                },
+                None => None,
+            });
         }
         Self { entries: cloned }
     }

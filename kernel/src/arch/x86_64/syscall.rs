@@ -360,10 +360,7 @@ fn do_fork(parent_frame: &SyscallFrame) -> u64 {
         let aspace = match cur.aspace.as_ref() {
             Some(a) => match a.clone_user_pages() {
                 Ok(child) => child,
-                Err(e) => {
-                    crate::println!("[fork] clone_user_pages failed: {:?}", e);
-                    return Err(ENOMEM);
-                }
+                Err(_) => return Err(ENOMEM),
             },
             None => return Err(EINVAL),
         };

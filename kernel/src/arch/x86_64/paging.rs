@@ -32,23 +32,7 @@ pub fn save_boot_mappings() {
     BOOT_CR3.call_once(|| {
         let cr3: u64;
         unsafe { asm!("mov {}, cr3", out(reg) cr3, options(nomem, nostack)) };
-        let phys = PhysAddr::new(cr3 & flags::ADDR_MASK);
-        // Debug: show which PML4 slots are occupied in the boot page table.
-        let pml4 = unsafe { &*(phys_to_virt(phys).as_ptr::<PageTable>()) };
-        let mut occupied = [0u16; 16];
-        let mut count = 0usize;
-        for i in 0..512 {
-            if pml4.entries[i].is_present() && count < 16 {
-                occupied[count] = i as u16;
-                count += 1;
-            }
-        }
-        crate::print!("[paging] boot PML4 occupied slots ({}):", count);
-        for i in 0..count {
-            crate::print!(" {}", occupied[i]);
-        }
-        crate::println!();
-        phys
+        PhysAddr::new(cr3 & flags::ADDR_MASK)
     });
 }
 

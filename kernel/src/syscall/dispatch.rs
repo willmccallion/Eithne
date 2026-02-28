@@ -381,8 +381,6 @@ fn sys_wait4(args: &[usize; 6]) -> SyscallResult {
 
     let (pid, status) = crate::sched::wait_for_child(child_pid)?;
 
-    crate::println!("[sys_wait4] returned pid={}, status={}", pid, status);
-
     // Write wait status to user space if pointer is non-null.
     if status_ptr != 0 {
         validate_user_ptr(status_ptr)?;

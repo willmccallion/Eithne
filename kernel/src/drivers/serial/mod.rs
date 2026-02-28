@@ -3,7 +3,7 @@
 //! Provides a kernel-global ring buffer that the COM1 RX interrupt handler
 //! fills and `sys_read` drains.
 
-use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use core::sync::atomic::{AtomicU64, Ordering};
 
 use crate::sync::{IrqSpinlock, Once};
 

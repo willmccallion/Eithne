@@ -8,6 +8,7 @@ pub struct Writer;
 impl fmt::Write for Writer {
     fn write_str(&mut self, s: &str) -> fmt::Result {
         arch::write_serial(s);
+        crate::drivers::fb::console::fb_write_str(s);
         Ok(())
     }
 }

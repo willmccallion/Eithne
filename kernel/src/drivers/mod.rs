@@ -1,4 +1,6 @@
 pub mod block;
+pub mod fb;
+pub mod kbd;
 pub mod net;
 pub mod pci;
 pub mod serial;

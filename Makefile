@@ -64,7 +64,7 @@ ESP_APP_DIR   := $(ESP_DIR)/EFI/eithne
 # Phony targets
 # ---------------------------------------------------------------------------
 
-.PHONY: all kernel user esp run clippy check clean
+.PHONY: all kernel user esp run run-gui clippy check clean
 
 all: esp
 
@@ -75,7 +75,7 @@ user: $(USER_INIT_ELF)
 esp: $(ESP_BOOT_DIR)/$(BOOT_FILE) $(ESP_APP_DIR)/init
 
 run: esp
-	@echo "==> Launching QEMU ($(ARCH))..."
+	@echo "==> Launching QEMU ($(ARCH)) — serial only..."
 	@echo "    Press Ctrl-B X to exit QEMU"
 	@echo ""
 	$(QEMU) \
@@ -83,6 +83,21 @@ run: esp
 		-drive format=raw,file=fat:rw:$(ESP_DIR) \
 		-net none \
 		-nographic \
+		-echr $(QEMU_ECHR) \
+		$(QEMU_EXTRA)
+
+run-gui: esp
+	@echo "==> Launching QEMU ($(ARCH)) — GUI + serial..."
+	@echo "    QEMU window: framebuffer output"
+	@echo "    Terminal:     serial I/O"
+	@echo "    Press Ctrl-B X to exit QEMU"
+	@echo ""
+	$(QEMU) \
+		-bios $(OVMF) \
+		-drive format=raw,file=fat:rw:$(ESP_DIR) \
+		-net none \
+		-serial stdio \
+		-vga std \
 		-echr $(QEMU_ECHR) \
 		$(QEMU_EXTRA)
 

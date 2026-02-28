@@ -81,11 +81,15 @@ fn sys_write(args: &[usize; 6]) -> SyscallResult {
 
     if let Ok(s) = core::str::from_utf8(bytes) {
         crate::arch::write_serial(s);
+        crate::drivers::fb::console::fb_write_str(s);
     } else {
         // Non-UTF-8: write byte-by-byte as hex escape sequences.
         for &b in bytes {
             if b.is_ascii() && !b.is_ascii_control() {
-                crate::arch::write_serial(core::str::from_utf8(&[b]).unwrap_or("?"));
+                let buf = [b];
+                let s = core::str::from_utf8(&buf).unwrap_or("?");
+                crate::arch::write_serial(s);
+                crate::drivers::fb::console::fb_write_str(s);
             }
         }
     }

@@ -20,12 +20,26 @@ use core::ptr::NonNull;
 
 use uefi::boot::{self, MemoryType};
 use uefi::prelude::*;
+use uefi::proto::console::gop::{GraphicsOutput, PixelFormat};
 use uefi::proto::media::file::{File, FileAttribute, FileInfo, FileMode};
 
 /// Loaded initramfs: physical pointer and size, surviving exit_boot_services.
 struct InitRamfs {
     ptr: NonNull<u8>,
     len: usize,
+}
+
+/// GOP framebuffer info captured before exit_boot_services.
+///
+/// Contains only plain scalar values — no UEFI pointers — so it survives
+/// after boot services are torn down.
+pub struct FrameBufferInfo {
+    pub base: u64,
+    pub size: usize,
+    pub width: usize,
+    pub height: usize,
+    pub stride: usize,
+    pub is_bgr: bool,
 }
 
 #[entry]
@@ -38,14 +52,62 @@ fn efi_main() -> Status {
     // Load init ELF from ESP before exiting boot services.
     let initramfs = load_init_from_esp();
 
+    // Capture GOP framebuffer info before exiting boot services.
+    let fb_info = capture_gop_info();
+
     // Exit UEFI boot services and get the final memory map.
     let mmap = unsafe { boot::exit_boot_services(MemoryType::LOADER_DATA) };
 
     let boot_info = mm::boot_info::BootMemoryInfo::from_uefi_mmap(&mmap);
 
-    kernel_main(boot_info, initramfs);
+    kernel_main(boot_info, initramfs, fb_info);
 
     Status::SUCCESS
+}
+
+/// Capture GOP framebuffer information before exiting boot services.
+///
+/// The physical framebuffer address remains valid after exit_boot_services
+/// even though the protocol handle itself becomes invalid.
+fn capture_gop_info() -> Option<FrameBufferInfo> {
+    let handle = boot::get_handle_for_protocol::<GraphicsOutput>().ok()?;
+    let mut gop = boot::open_protocol_exclusive::<GraphicsOutput>(handle).ok()?;
+
+    let mode_info = gop.current_mode_info();
+    let (width, height) = mode_info.resolution();
+    let stride = mode_info.stride();
+
+    let is_bgr = match mode_info.pixel_format() {
+        PixelFormat::Bgr => true,
+        PixelFormat::Rgb => false,
+        other => {
+            println!("[gop] unsupported pixel format: {:?}", other);
+            return None;
+        }
+    };
+
+    let mut fb = gop.frame_buffer();
+    let base = fb.as_mut_ptr() as u64;
+    let size = fb.size();
+
+    println!(
+        "[gop] {}x{} stride={} {} base={:#x} size={:#x}",
+        width,
+        height,
+        stride,
+        if is_bgr { "BGR" } else { "RGB" },
+        base,
+        size
+    );
+
+    Some(FrameBufferInfo {
+        base,
+        size,
+        width,
+        height,
+        stride,
+        is_bgr,
+    })
 }
 
 /// Load `\EFI\eithne\init` from the ESP into a LOADER_DATA pool allocation.
@@ -95,7 +157,11 @@ fn load_init_from_esp() -> Option<InitRamfs> {
     })
 }
 
-fn kernel_main(boot_info: mm::boot_info::BootMemoryInfo, initramfs: Option<InitRamfs>) {
+fn kernel_main(
+    boot_info: mm::boot_info::BootMemoryInfo,
+    initramfs: Option<InitRamfs>,
+    fb_info: Option<FrameBufferInfo>,
+) {
     println!("[eithne] entering kernel_main");
 
     // 1. Memory management (frame allocator + heap).
@@ -103,7 +169,16 @@ fn kernel_main(boot_info: mm::boot_info::BootMemoryInfo, initramfs: Option<InitR
 
     // 2. Higher-half direct map: all physical memory at KERNEL_VIRT_BASE.
     //    Must happen before init_interrupts so GDT/IDT pointers are stable.
-    arch::init_higher_half(boot_info.max_phys_addr.as_u64());
+    //    Extend to cover the GOP framebuffer which may be at a high physical address.
+    let max_phys = if let Some(ref fb) = fb_info {
+        boot_info
+            .max_phys_addr
+            .as_u64()
+            .max(fb.base + fb.size as u64)
+    } else {
+        boot_info.max_phys_addr.as_u64()
+    };
+    arch::init_higher_half(max_phys);
     mm::set_higher_half_offset(crate::mm::layout::KERNEL_VIRT_BASE);
 
     // 3. GDT, IDT, PIC, interrupts.
@@ -118,6 +193,13 @@ fn kernel_main(boot_info: mm::boot_info::BootMemoryInfo, initramfs: Option<InitR
     // 6. Serial input buffer + COM1 RX interrupts.
     drivers::serial::init();
     arch::enable_serial_rx();
+
+    // 7. Framebuffer console (if GOP was available).
+    if let Some(fb) = fb_info {
+        drivers::fb::init(fb);
+        drivers::fb::console::init();
+        println!("[fb] framebuffer console initialized");
+    }
 
     // 8. Scheduler.
     sched::init();

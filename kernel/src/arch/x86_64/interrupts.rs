@@ -75,9 +75,10 @@ pub fn init_pic() {
         outb(PIC2_DATA, ICW4_8086);
         io_wait();
 
-        // Build initial IRQ mask: unmask timer and COM1.
+        // Build initial IRQ mask: unmask timer, keyboard, and COM1.
         let mut mask: u8 = 0xFF;
         mask &= !(1 << IRQ_TIMER);
+        mask &= !(1 << IRQ_KEYBOARD);
         mask &= !(1 << IRQ_COM1);
         outb(PIC1_DATA, mask);
         io_wait();
@@ -85,7 +86,10 @@ pub fn init_pic() {
         io_wait();
     }
 
-    crate::println!("[pic] IRQ{} (timer), IRQ{} (COM1) unmasked", IRQ_TIMER, IRQ_COM1);
+    crate::println!(
+        "[pic] IRQ{} (timer), IRQ{} (kbd), IRQ{} (COM1) unmasked",
+        IRQ_TIMER, IRQ_KEYBOARD, IRQ_COM1
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -139,10 +143,7 @@ pub fn mask_irq(irq: u8) {
 pub fn irq_handler(irq: u8, _frame: &InterruptFrame) {
     match irq {
         IRQ_TIMER => {
-            let ticks = TIMER_TICKS.fetch_add(1, Ordering::Relaxed) + 1;
-            if ticks.is_multiple_of(100) {
-                crate::println!("[timer] {} ticks", ticks);
-            }
+            TIMER_TICKS.fetch_add(1, Ordering::Relaxed);
             // Signal the scheduler; the actual switch happens in check_resched
             // at the isr_common exit path, after the full InterruptFrame is on
             // the stack and the Rust handler has returned.
@@ -150,7 +151,7 @@ pub fn irq_handler(irq: u8, _frame: &InterruptFrame) {
         }
         IRQ_KEYBOARD => {
             let scancode = unsafe { inb(PS2_DATA_PORT) };
-            crate::println!("[kbd] scancode: {:#x}", scancode);
+            crate::drivers::kbd::handle_scancode(scancode);
         }
         IRQ_COM1 => {
             // Drain the COM1 FIFO into the serial input buffer.

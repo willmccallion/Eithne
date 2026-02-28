@@ -3,7 +3,7 @@
 //! Provides a kernel-global ring buffer that the COM1 RX interrupt handler
 //! fills and `sys_read` drains.
 
-use core::sync::atomic::{AtomicBool, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use crate::sync::{IrqSpinlock, Once};
 
@@ -52,9 +52,9 @@ impl InputBuffer {
 
 static SERIAL_INPUT: Once<IrqSpinlock<InputBuffer>> = Once::new();
 
-/// Set when a reader task is blocked waiting for input.
-/// The IRQ handler checks this to know whether to wake a task.
-pub static READER_BLOCKED: AtomicBool = AtomicBool::new(false);
+/// Task ID of the task blocked waiting for serial input, or 0 if none.
+/// The IRQ handler checks this to know which specific task to wake.
+pub static SERIAL_READER_TID: AtomicU64 = AtomicU64::new(0);
 
 pub fn init() {
     SERIAL_INPUT.call_once(|| IrqSpinlock::new(InputBuffer::new()));

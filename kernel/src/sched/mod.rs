@@ -182,19 +182,31 @@ pub fn exit_current_with_code(code: i32) -> ! {
         let sched = SCHEDULER.get().expect("scheduler not init");
         let mut guard = sched.lock();
 
+        let my_id = guard.current_id();
+        let parent_id = guard.current_parent();
+        crate::println!(
+            "[exit] task {:?} exiting with code={}, status={}, parent={:?}",
+            my_id,
+            code,
+            status,
+            parent_id
+        );
+
         // Record exit status.
         guard.kill_current_with_status(status);
 
         // Reparent all children to init.
-        if let Some(my_id) = guard.current_id() {
+        if let Some(my_id) = my_id {
             guard.reparent_children(my_id, INIT_TASK_ID);
         }
 
         // Wake the parent if it's blocked (waiting in waitpid).
-        if let Some(parent_id) = guard.current_parent() {
-            guard.wake_task(parent_id);
+        if let Some(parent_id) = parent_id {
+            let woke = guard.wake_task(parent_id);
+            crate::println!("[exit] wake_task({:?}) = {}", parent_id, woke);
         }
     }
+    crate::println!("[exit] calling yield_cpu");
     yield_cpu();
     loop {
         crate::arch::halt_once();
@@ -208,6 +220,7 @@ pub fn exit_current_with_code(code: i32) -> ! {
 pub fn wait_for_child(child_pid: u64) -> Result<(u64, i32), crate::syscall::traits::SyscallError> {
     use crate::syscall::traits::SyscallError;
 
+    crate::println!("[wait] wait_for_child(pid={})", child_pid);
     loop {
         let should_block = {
             let sched = SCHEDULER.get().ok_or(SyscallError::IoError)?;
@@ -217,14 +230,17 @@ pub fn wait_for_child(child_pid: u64) -> Result<(u64, i32), crate::syscall::trai
 
             // Try to collect a zombie child.
             if let Some((tid, status)) = guard.collect_zombie(my_id, child_pid) {
+                crate::println!("[wait] collected zombie tid={}, status={}", tid.0, status);
                 return Ok((tid.0, status));
             }
 
             // No zombie — check if we have any children at all.
             if !guard.has_children(my_id) {
+                crate::println!("[wait] no children — returning ECHILD");
                 return Err(SyscallError::NoChildren);
             }
 
+            crate::println!("[wait] task {:?} blocking for child", my_id);
             // Block this task; it will be woken when a child exits.
             guard.block_current();
             guard.prepare_switch()
@@ -233,6 +249,9 @@ pub fn wait_for_child(child_pid: u64) -> Result<(u64, i32), crate::syscall::trai
         if let Some(p) = should_block {
             activate_task(p.new_kstack_top, p.new_cr3);
             unsafe { context::yield_now(p.old_rsp_ptr, p.new_rsp) };
+            crate::println!("[wait] resumed from yield");
+        } else {
+            crate::println!("[wait] prepare_switch returned None — no ready task");
         }
         // After waking, loop to re-check for zombies.
     }
@@ -271,16 +290,17 @@ pub fn block_current_if(should_block: impl FnOnce() -> bool) {
     }
 }
 
-/// Wake the first blocked task. Called from the serial RX IRQ handler.
+/// Wake the specific task blocked on serial read. Called from the serial
+/// RX and keyboard IRQ handlers.
 ///
 /// Also sets NEED_RESCHED so that `check_resched` switches to the woken
 /// task on the very next interrupt return, rather than waiting for a timer tick.
-pub fn wake_reader() {
+pub fn wake_serial_reader(tid: u64) {
     let sched = match SCHEDULER.get() {
         Some(s) => s,
         None => return,
     };
-    if sched.lock().wake_blocked() {
+    if sched.lock().wake_task(TaskId(tid)) {
         NEED_RESCHED.store(true, Ordering::Release);
     }
 }
@@ -301,6 +321,8 @@ pub fn yield_cpu() {
     if let Some(p) = pending {
         activate_task(p.new_kstack_top, p.new_cr3);
         unsafe { yield_now(p.old_rsp_ptr, p.new_rsp) };
+    } else {
+        crate::println!("[yield] no ready task to switch to");
     }
 }
 

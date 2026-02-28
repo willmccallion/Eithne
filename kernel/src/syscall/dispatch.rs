@@ -112,13 +112,17 @@ fn sys_read(args: &[usize; 6]) -> SyscallResult {
             // Block only if the buffer is still empty.  The condition closure
             // runs with interrupts disabled (inside the scheduler's IrqSpinlock),
             // so no IRQ can push data between this check and the actual block.
-            crate::drivers::serial::READER_BLOCKED.store(true, Ordering::Release);
+            //
+            // Store our task ID so the IRQ handler wakes us specifically,
+            // not some other blocked task (e.g. a parent in waitpid).
+            let my_tid = crate::sched::current_task_id().unwrap_or(crate::sched::TaskId(0));
+            crate::drivers::serial::SERIAL_READER_TID.store(my_tid.0, Ordering::Release);
             crate::sched::block_current_if(|| {
                 if crate::drivers::serial::is_empty() {
                     true // buffer still empty → block
                 } else {
                     // Data arrived between read() and here; cancel the block.
-                    crate::drivers::serial::READER_BLOCKED.store(false, Ordering::Release);
+                    crate::drivers::serial::SERIAL_READER_TID.store(0, Ordering::Release);
                     false
                 }
             });
@@ -376,6 +380,8 @@ fn sys_wait4(args: &[usize; 6]) -> SyscallResult {
     };
 
     let (pid, status) = crate::sched::wait_for_child(child_pid)?;
+
+    crate::println!("[sys_wait4] returned pid={}, status={}", pid, status);
 
     // Write wait status to user space if pointer is non-null.
     if status_ptr != 0 {

@@ -184,6 +184,9 @@ fn kernel_main(
     arch::init_higher_half(max_phys);
     mm::set_higher_half_offset(crate::mm::layout::KERNEL_VIRT_BASE);
 
+    // 2.5. Snapshot boot page table before any user processes.
+    arch::save_boot_mappings();
+
     // 3. GDT, IDT, PIC, interrupts.
     arch::init_interrupts();
 

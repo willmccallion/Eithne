@@ -15,6 +15,42 @@ use crate::mm::traits::{
     AddressSpace, FrameAllocator, MapError, PageFlags, PageMapper, UnmapError,
 };
 use crate::mm::{frame, page::PAGE_SIZE};
+use crate::sync::Once;
+
+/// Boot-time CR3 snapshot, taken before any user processes are created.
+///
+/// `new_with_kernel_mappings()` copies PML4 entries from this instead of
+/// the current CR3, so that user-space entries from the running process
+/// are never leaked into new address spaces.
+static BOOT_CR3: Once<PhysAddr> = Once::new();
+
+/// Snapshot the current CR3 as the "clean" kernel page table template.
+///
+/// Must be called once during init, after the higher-half direct map is
+/// set up but before any user processes are spawned.
+pub fn save_boot_mappings() {
+    BOOT_CR3.call_once(|| {
+        let cr3: u64;
+        unsafe { asm!("mov {}, cr3", out(reg) cr3, options(nomem, nostack)) };
+        let phys = PhysAddr::new(cr3 & flags::ADDR_MASK);
+        // Debug: show which PML4 slots are occupied in the boot page table.
+        let pml4 = unsafe { &*(phys_to_virt(phys).as_ptr::<PageTable>()) };
+        let mut occupied = [0u16; 16];
+        let mut count = 0usize;
+        for i in 0..512 {
+            if pml4.entries[i].is_present() && count < 16 {
+                occupied[count] = i as u16;
+                count += 1;
+            }
+        }
+        crate::print!("[paging] boot PML4 occupied slots ({}):", count);
+        for i in 0..count {
+            crate::print!(" {}", occupied[i]);
+        }
+        crate::println!();
+        phys
+    });
+}
 
 // ---------------------------------------------------------------------------
 // Page table entry flags
@@ -190,15 +226,16 @@ impl KernelAddressSpace {
     pub fn new_with_kernel_mappings() -> Result<Self, crate::mm::traits::MapError> {
         let new = Self::new().ok_or(crate::mm::traits::MapError::FrameAllocationFailed)?;
 
-        let cur_cr3: u64;
-        unsafe { asm!("mov {}, cr3", out(reg) cur_cr3, options(nomem, nostack)) };
-        let cur_pml4 = unsafe {
-            &*(phys_to_virt(PhysAddr::new(cur_cr3 & flags::ADDR_MASK)).as_ptr::<PageTable>())
-        };
+        // Use the boot-time PML4 snapshot so we get kernel + UEFI identity
+        // mappings but never leak user-space entries from the running process.
+        let boot_cr3 = BOOT_CR3
+            .get()
+            .expect("save_boot_mappings() not called before new_with_kernel_mappings()");
+        let boot_pml4 = unsafe { &*(phys_to_virt(*boot_cr3).as_ptr::<PageTable>()) };
         let new_pml4 = unsafe { &mut *(phys_to_virt(new.cr3).as_mut_ptr::<PageTable>()) };
 
         for i in 0..512 {
-            new_pml4.entries[i] = cur_pml4.entries[i];
+            new_pml4.entries[i] = boot_pml4.entries[i];
         }
 
         Ok(new)
@@ -250,23 +287,15 @@ impl KernelAddressSpace {
     pub fn clone_user_pages(&self) -> Result<Self, MapError> {
         let mut child = Self::new_with_kernel_mappings()?;
 
-        // Clear user-space PML4 entries (0..256) in the child.
-        // new_with_kernel_mappings() copied ALL 512 entries from the current
-        // CR3, including the parent's user mappings.  We need a clean slate
-        // so that map() below can create fresh intermediate tables.
-        {
-            let child_pml4 = child.pml4();
-            for i in 0..256 {
-                child_pml4.entries[i] = PageTableEntry::empty();
-            }
-        }
-
         let parent_pml4 = self.pml4_ref();
 
         for i4 in 0..256 {
             let e4 = parent_pml4.entries[i4];
             if !e4.is_present() {
                 continue;
+            }
+            if e4.0 & flags::USER == 0 {
+                continue; // skip kernel/UEFI identity-map entries (not user pages)
             }
             if e4.0 & flags::HUGE != 0 {
                 continue; // skip huge PML4 entries (shouldn't exist, but be safe)

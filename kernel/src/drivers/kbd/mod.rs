@@ -103,9 +103,10 @@ pub fn handle_scancode(scancode: u8) {
     if ascii != 0 {
         crate::drivers::serial::push_byte(ascii);
 
-        // Wake a blocked reader if one is waiting.
-        if crate::drivers::serial::READER_BLOCKED.swap(false, Ordering::AcqRel) {
-            crate::sched::wake_reader();
+        // Wake the blocked serial reader if one is waiting.
+        let tid = crate::drivers::serial::SERIAL_READER_TID.swap(0, Ordering::AcqRel);
+        if tid != 0 {
+            crate::sched::wake_serial_reader(tid);
         }
     }
 }

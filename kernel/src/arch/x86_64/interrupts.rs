@@ -160,9 +160,10 @@ pub fn irq_handler(irq: u8, _frame: &InterruptFrame) {
             while let Some(byte) = super::serial::read_byte() {
                 crate::drivers::serial::push_byte(byte);
             }
-            // Wake a blocked reader if one is waiting.
-            if crate::drivers::serial::READER_BLOCKED.swap(false, Ordering::AcqRel) {
-                crate::sched::wake_reader();
+            // Wake the blocked serial reader if one is waiting.
+            let tid = crate::drivers::serial::SERIAL_READER_TID.swap(0, Ordering::AcqRel);
+            if tid != 0 {
+                crate::sched::wake_serial_reader(tid);
             }
         }
         _ => {

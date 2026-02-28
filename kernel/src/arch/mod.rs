@@ -64,6 +64,15 @@ pub fn init_higher_half(max_phys: u64) {
     platform::Platform::init_higher_half(max_phys);
 }
 
+/// Snapshot the boot page table so new address spaces get clean kernel
+/// mappings without user-space contamination.
+///
+/// Must be called after `init_higher_half` but before any user processes.
+pub fn save_boot_mappings() {
+    #[cfg(target_arch = "x86_64")]
+    x86_64::paging::save_boot_mappings();
+}
+
 /// Initialize the fast system call interface.
 pub fn init_syscalls() {
     platform::Platform::init_syscalls();

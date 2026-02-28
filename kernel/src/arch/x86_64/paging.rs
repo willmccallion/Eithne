@@ -249,6 +249,18 @@ impl KernelAddressSpace {
     /// contents for every mapped 4 KiB page.
     pub fn clone_user_pages(&self) -> Result<Self, MapError> {
         let mut child = Self::new_with_kernel_mappings()?;
+
+        // Clear user-space PML4 entries (0..256) in the child.
+        // new_with_kernel_mappings() copied ALL 512 entries from the current
+        // CR3, including the parent's user mappings.  We need a clean slate
+        // so that map() below can create fresh intermediate tables.
+        {
+            let child_pml4 = child.pml4();
+            for i in 0..256 {
+                child_pml4.entries[i] = PageTableEntry::empty();
+            }
+        }
+
         let parent_pml4 = self.pml4_ref();
 
         for i4 in 0..256 {

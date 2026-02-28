@@ -4,3 +4,4 @@ pub mod traits;
 pub mod vfs;
 
 pub use traits::{DirEntry, File, FileSystem};
+pub use vfs::{close, init, mkdir, open, read, readdir, stat, unlink, write};

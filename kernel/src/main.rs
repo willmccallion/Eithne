@@ -149,7 +149,10 @@ fn load_init_from_esp() -> Option<InitRamfs> {
         .read(buf_slice)
         .expect("[initramfs] failed to read init file");
 
-    println!("[initramfs] loaded {} bytes from \\EFI\\eithne\\init", bytes_read);
+    println!(
+        "[initramfs] loaded {} bytes from \\EFI\\eithne\\init",
+        bytes_read
+    );
 
     Some(InitRamfs {
         ptr: buf_ptr,
@@ -189,6 +192,9 @@ fn kernel_main(
 
     // 5. Syscall interface.
     arch::init_syscalls();
+
+    // 5.5. Virtual filesystem (ramfs root).
+    fs::init();
 
     // 6. Serial input buffer + COM1 RX interrupts.
     drivers::serial::init();

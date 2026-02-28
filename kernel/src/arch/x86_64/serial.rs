@@ -11,12 +11,12 @@ use super::io::{inb, outb};
 const COM1: u16 = 0x3F8;
 
 /// Offsets from the COM port base address.
-const REG_DATA: u16 = 0;    // RBR (read) / THR (write) — also DLL when DLAB=1
-const REG_IER: u16 = 1;     // Interrupt Enable Register — also DLH when DLAB=1
-const REG_FCR: u16 = 2;     // FIFO Control Register (write)
-const REG_LCR: u16 = 3;     // Line Control Register
-const REG_MCR: u16 = 4;     // Modem Control Register
-const REG_LSR: u16 = 5;     // Line Status Register
+const REG_DATA: u16 = 0; // RBR (read) / THR (write) — also DLL when DLAB=1
+const REG_IER: u16 = 1; // Interrupt Enable Register — also DLH when DLAB=1
+const REG_FCR: u16 = 2; // FIFO Control Register (write)
+const REG_LCR: u16 = 3; // Line Control Register
+const REG_MCR: u16 = 4; // Modem Control Register
+const REG_LSR: u16 = 5; // Line Status Register
 
 // ---------------------------------------------------------------------------
 // Line Status Register bits
@@ -35,8 +35,8 @@ const IER_RX_AVAILABLE: u8 = 1 << 0;
 // Line Control Register bits
 // ---------------------------------------------------------------------------
 
-const LCR_DLAB: u8 = 0x80;   // Divisor Latch Access Bit
-const LCR_8N1: u8 = 0x03;    // 8 data bits, no parity, 1 stop bit
+const LCR_DLAB: u8 = 0x80; // Divisor Latch Access Bit
+const LCR_8N1: u8 = 0x03; // 8 data bits, no parity, 1 stop bit
 
 // ---------------------------------------------------------------------------
 // FIFO Control Register bits
@@ -53,7 +53,7 @@ const FCR_TRIGGER_14: u8 = 0xC0; // 14-byte trigger level
 
 const MCR_DTR: u8 = 0x01;
 const MCR_RTS: u8 = 0x02;
-const MCR_OUT2: u8 = 0x08;   // required for PIC-routed interrupts
+const MCR_OUT2: u8 = 0x08; // required for PIC-routed interrupts
 
 // ---------------------------------------------------------------------------
 // Public API
@@ -72,7 +72,10 @@ pub fn init() {
         // 8 bits, no parity, one stop bit (clears DLAB).
         outb(COM1 + REG_LCR, LCR_8N1);
         // Enable FIFO, clear both FIFOs, 14-byte trigger threshold.
-        outb(COM1 + REG_FCR, FCR_ENABLE_FIFO | FCR_CLEAR_RX | FCR_CLEAR_TX | FCR_TRIGGER_14);
+        outb(
+            COM1 + REG_FCR,
+            FCR_ENABLE_FIFO | FCR_CLEAR_RX | FCR_CLEAR_TX | FCR_TRIGGER_14,
+        );
         // Assert DTR, RTS, and OUT2 (OUT2 gates PIC interrupts).
         outb(COM1 + REG_MCR, MCR_DTR | MCR_RTS | MCR_OUT2);
     }

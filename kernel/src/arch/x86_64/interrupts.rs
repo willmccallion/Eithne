@@ -88,7 +88,9 @@ pub fn init_pic() {
 
     crate::println!(
         "[pic] IRQ{} (timer), IRQ{} (kbd), IRQ{} (COM1) unmasked",
-        IRQ_TIMER, IRQ_KEYBOARD, IRQ_COM1
+        IRQ_TIMER,
+        IRQ_KEYBOARD,
+        IRQ_COM1
     );
 }
 

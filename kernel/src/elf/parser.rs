@@ -123,8 +123,8 @@ impl<'a> Elf64Info<'a> {
         }
 
         // Verify program header table fits within the data
-        let phdr_end = header.e_phoff as usize
-            + (header.e_phnum as usize) * mem::size_of::<Elf64Phdr>();
+        let phdr_end =
+            header.e_phoff as usize + (header.e_phnum as usize) * mem::size_of::<Elf64Phdr>();
         if phdr_end > data.len() {
             return Err(ElfParseError::Truncated);
         }

@@ -1,3 +1,6 @@
+extern crate alloc;
+use alloc::vec::Vec;
+
 /// File open mode flags.
 #[derive(Debug, Clone, Copy)]
 pub struct OpenFlags {
@@ -94,7 +97,7 @@ pub trait FileSystem {
     fn stat(&self, path: &str) -> Result<FileStat, FsError>;
 
     /// List directory entries.
-    fn readdir(&self, path: &str) -> Result<&[DirEntry], FsError>;
+    fn readdir(&self, path: &str) -> Result<Vec<DirEntry>, FsError>;
 
     /// Create a directory.
     fn mkdir(&self, path: &str) -> Result<(), FsError>;

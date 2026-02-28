@@ -57,7 +57,10 @@ impl RoundRobinScheduler {
 
     /// Pop the first `Ready` task from the queue, skipping any `Blocked` tasks.
     fn pop_next_ready(&mut self) -> Option<Task> {
-        let pos = self.queue.iter().position(|t| t.state == TaskState::Ready)?;
+        let pos = self
+            .queue
+            .iter()
+            .position(|t| t.state == TaskState::Ready)?;
         self.queue.remove(pos)
     }
 

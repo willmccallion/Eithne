@@ -68,8 +68,7 @@ const USER_STACK_OFFSET: u64 = 0x7FFF_0000;
 /// PML4 slot, and maps all PT_LOAD segments with an offset to avoid conflicts
 /// with the kernel identity map.
 pub fn load_elf(elf: &Elf64Info) -> Result<LoadedElf, ElfLoadError> {
-    let mut aspace =
-        KernelAddressSpace::new_with_kernel_mappings().map_err(ElfLoadError::Map)?;
+    let mut aspace = KernelAddressSpace::new_with_kernel_mappings().map_err(ElfLoadError::Map)?;
 
     let user_base = aspace
         .find_free_user_base()
@@ -94,11 +93,7 @@ pub fn load_elf(elf: &Elf64Info) -> Result<LoadedElf, ElfLoadError> {
             let dst = phys_to_virt(page_phys).as_mut_ptr::<u8>();
             core::ptr::write_bytes(dst, 0, PAGE_SIZE);
         }
-        aspace.map(
-            VirtAddr::new(page_virt),
-            page_phys,
-            PageFlags::USER_RW,
-        )?;
+        aspace.map(VirtAddr::new(page_virt), page_phys, PageFlags::USER_RW)?;
     }
 
     let entry_point = elf.entry_point() + reloc_offset;
@@ -157,11 +152,24 @@ fn map_segment(
 
         // Copy file data into this page.
         if file_copied < filesz {
-            let page_start_in_seg = if page_idx == 0 { offset_in_first_page } else { 0 };
-            let dst_offset = if page_idx == 0 { offset_in_first_page } else { 0 };
+            let page_start_in_seg = if page_idx == 0 {
+                offset_in_first_page
+            } else {
+                0
+            };
+            let dst_offset = if page_idx == 0 {
+                offset_in_first_page
+            } else {
+                0
+            };
 
             // How much of this page overlaps with file data?
-            let seg_offset = page_idx * PAGE_SIZE - (if page_idx == 0 { 0 } else { offset_in_first_page });
+            let seg_offset = page_idx * PAGE_SIZE
+                - (if page_idx == 0 {
+                    0
+                } else {
+                    offset_in_first_page
+                });
             let _ = seg_offset;
             let _ = page_start_in_seg;
 

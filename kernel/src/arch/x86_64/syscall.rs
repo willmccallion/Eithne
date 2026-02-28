@@ -273,6 +273,7 @@ const ENOTDIR: u64 = 20;
 const EISDIR: u64 = 21;
 const EINVAL: u64 = 22;
 const ENOSYS: u64 = 38;
+const EPIPE: u64 = 32;
 const ENOEXEC: u64 = 8;
 
 fn syscall_error_to_errno(e: crate::syscall::traits::SyscallError) -> u64 {
@@ -289,6 +290,7 @@ fn syscall_error_to_errno(e: crate::syscall::traits::SyscallError) -> u64 {
         SyscallError::IsADirectory => EISDIR,
         SyscallError::NotADirectory => ENOTDIR,
         SyscallError::NoChildren => ECHILD,
+        SyscallError::BrokenPipe => EPIPE,
     }
 }
 
@@ -494,24 +496,38 @@ fn do_exec(frame: &mut SyscallFrame) {
     };
 
     // Close close-on-exec FDs and swap address space.
-    {
+    // Extract cloexec FdKinds under the scheduler lock, then close them
+    // outside to avoid lock ordering issues (pipe_close may wake tasks).
+    let cloexec_fds = {
         let result = crate::sched::with_current_task(|task| {
-            // Close cloexec FDs.
-            if let Some(ref mut fdt) = task.fd_table {
-                let handles = fdt.close_cloexec();
-                for h in handles {
-                    let _ = crate::fs::vfs::close(h);
-                }
-            }
+            let fds = if let Some(ref mut fdt) = task.fd_table {
+                fdt.close_cloexec()
+            } else {
+                alloc::vec::Vec::new()
+            };
 
             // Replace address space (old one is dropped, freeing pages).
             task.aspace = Some(loaded.aspace);
 
-            Ok(())
+            Ok(fds)
         });
-        if result.is_err() {
-            frame.rax = ENOMEM.wrapping_neg();
-            return;
+        match result {
+            Ok(fds) => fds,
+            Err(_) => {
+                frame.rax = ENOMEM.wrapping_neg();
+                return;
+            }
+        }
+    };
+    // Scheduler lock dropped — safe to close pipes/VFS handles.
+    for kind in cloexec_fds {
+        match kind {
+            crate::sched::fd::FdKind::Vfs(h) => {
+                let _ = crate::fs::vfs::close(h);
+            }
+            crate::sched::fd::FdKind::Pipe(h) => {
+                crate::ipc::pipe::pipe_close(h);
+            }
         }
     }
 

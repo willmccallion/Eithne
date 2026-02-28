@@ -6,6 +6,7 @@ use core::sync::atomic::Ordering;
 use super::table::*;
 use super::traits::{SyscallError, SyscallResult};
 use crate::fs::traits::{DirEntry, FileType, OpenFlags};
+use crate::sched::fd::FdKind;
 
 /// Kernel virtual address boundary — pointers at or above this are kernel space.
 const KERNEL_SPACE_START: usize = 0xFFFF_8000_0000_0000;
@@ -23,6 +24,8 @@ pub fn dispatch(num: usize, args: &[usize; 6]) -> SyscallResult {
         SYS_OPEN => sys_open(args),
         SYS_CLOSE => sys_close(args),
         SYS_STAT => sys_stat(args),
+        SYS_PIPE => sys_pipe(args),
+        SYS_DUP2 => sys_dup2(args),
         SYS_FORK | SYS_EXECVE => unreachable!("handled in arch syscall layer"),
         SYS_EXIT => sys_exit(args),
         SYS_WAIT4 => sys_wait4(args),
@@ -86,6 +89,51 @@ fn linux_flags_to_open_flags(flags: usize) -> OpenFlags {
 }
 
 // ---------------------------------------------------------------------------
+// Default stdio helpers (serial + framebuffer)
+// ---------------------------------------------------------------------------
+
+/// Default stdin: blocking read from the serial console.
+fn default_stdin_read(ptr: *mut u8, len: usize) -> SyscallResult {
+    let buf = unsafe { core::slice::from_raw_parts_mut(ptr, len) };
+
+    loop {
+        let n = crate::drivers::serial::read(buf, len);
+        if n > 0 {
+            return Ok(n);
+        }
+        let my_tid = crate::sched::current_task_id().unwrap_or(crate::sched::TaskId(0));
+        crate::drivers::serial::SERIAL_READER_TID.store(my_tid.0, Ordering::Release);
+        crate::sched::block_current_if(|| {
+            if crate::drivers::serial::is_empty() {
+                true
+            } else {
+                crate::drivers::serial::SERIAL_READER_TID.store(0, Ordering::Release);
+                false
+            }
+        });
+    }
+}
+
+/// Default stdout/stderr: write to serial + framebuffer console.
+fn default_console_write(ptr: *const u8, len: usize) -> SyscallResult {
+    let bytes = unsafe { core::slice::from_raw_parts(ptr, len) };
+    if let Ok(s) = core::str::from_utf8(bytes) {
+        crate::arch::write_serial(s);
+        crate::drivers::fb::console::fb_write_str(s);
+    } else {
+        for &b in bytes {
+            if b.is_ascii() && !b.is_ascii_control() {
+                let buf = [b];
+                let s = core::str::from_utf8(&buf).unwrap_or("?");
+                crate::arch::write_serial(s);
+                crate::drivers::fb::console::fb_write_str(s);
+            }
+        }
+    }
+    Ok(len)
+}
+
+// ---------------------------------------------------------------------------
 // sys_read(fd, buf_ptr, len) -> bytes_read
 // ---------------------------------------------------------------------------
 
@@ -100,45 +148,28 @@ fn sys_read(args: &[usize; 6]) -> SyscallResult {
 
     validate_user_ptr(ptr as usize)?;
 
-    // Stdio fd 0 (stdin) — serial console.
-    if fd == 0 {
-        let buf = unsafe { core::slice::from_raw_parts_mut(ptr, len) };
+    // Check the fd table — pipes and VFS fds override default stdio.
+    let kind = crate::sched::with_current_fd_table(|fdt| fdt.get_kind(fd))?;
 
-        loop {
-            let n = crate::drivers::serial::read(buf, len);
-            if n > 0 {
-                return Ok(n);
+    match kind {
+        Some(FdKind::Pipe(h)) => {
+            let buf = unsafe { core::slice::from_raw_parts_mut(ptr, len) };
+            crate::ipc::pipe::pipe_read(h.pipe_id, buf)
+        }
+        Some(FdKind::Vfs(h)) => {
+            let buf = unsafe { core::slice::from_raw_parts_mut(ptr, len) };
+            let n = crate::fs::vfs::read(h, buf)?;
+            Ok(n)
+        }
+        None => {
+            // Default stdio: fd 0 = serial read, fd 1/2 = not readable.
+            match fd {
+                0 => default_stdin_read(ptr, len),
+                1 | 2 => Err(SyscallError::InvalidArgument),
+                _ => Err(SyscallError::InvalidArgument), // unreachable: get_kind returns Err
             }
-            // Block only if the buffer is still empty.  The condition closure
-            // runs with interrupts disabled (inside the scheduler's IrqSpinlock),
-            // so no IRQ can push data between this check and the actual block.
-            //
-            // Store our task ID so the IRQ handler wakes us specifically,
-            // not some other blocked task (e.g. a parent in waitpid).
-            let my_tid = crate::sched::current_task_id().unwrap_or(crate::sched::TaskId(0));
-            crate::drivers::serial::SERIAL_READER_TID.store(my_tid.0, Ordering::Release);
-            crate::sched::block_current_if(|| {
-                if crate::drivers::serial::is_empty() {
-                    true // buffer still empty → block
-                } else {
-                    // Data arrived between read() and here; cancel the block.
-                    crate::drivers::serial::SERIAL_READER_TID.store(0, Ordering::Release);
-                    false
-                }
-            });
         }
     }
-
-    // Stdio fd 1/2 — reading from stdout/stderr not supported.
-    if fd == 1 || fd == 2 {
-        return Err(SyscallError::InvalidArgument);
-    }
-
-    // VFS file descriptor.
-    let handle = crate::sched::with_current_fd_table(|fdt| fdt.get(fd))?;
-    let buf = unsafe { core::slice::from_raw_parts_mut(ptr, len) };
-    let n = crate::fs::vfs::read(handle, buf)?;
-    Ok(n)
 }
 
 // ---------------------------------------------------------------------------
@@ -156,35 +187,27 @@ fn sys_write(args: &[usize; 6]) -> SyscallResult {
 
     validate_user_ptr(ptr as usize)?;
 
-    // Stdio fds 1/2 — serial + framebuffer console.
-    if fd == 1 || fd == 2 {
-        let bytes = unsafe { core::slice::from_raw_parts(ptr, len) };
-        if let Ok(s) = core::str::from_utf8(bytes) {
-            crate::arch::write_serial(s);
-            crate::drivers::fb::console::fb_write_str(s);
-        } else {
-            for &b in bytes {
-                if b.is_ascii() && !b.is_ascii_control() {
-                    let buf = [b];
-                    let s = core::str::from_utf8(&buf).unwrap_or("?");
-                    crate::arch::write_serial(s);
-                    crate::drivers::fb::console::fb_write_str(s);
-                }
+    let kind = crate::sched::with_current_fd_table(|fdt| fdt.get_kind(fd))?;
+
+    match kind {
+        Some(FdKind::Pipe(h)) => {
+            let buf = unsafe { core::slice::from_raw_parts(ptr, len) };
+            crate::ipc::pipe::pipe_write(h.pipe_id, buf)
+        }
+        Some(FdKind::Vfs(h)) => {
+            let buf = unsafe { core::slice::from_raw_parts(ptr, len) };
+            let n = crate::fs::vfs::write(h, buf)?;
+            Ok(n)
+        }
+        None => {
+            // Default stdio: fd 1/2 = console write, fd 0 = not writable.
+            match fd {
+                1 | 2 => default_console_write(ptr, len),
+                0 => Err(SyscallError::InvalidArgument),
+                _ => Err(SyscallError::InvalidArgument),
             }
         }
-        return Ok(len);
     }
-
-    // Stdio fd 0 — writing to stdin not supported.
-    if fd == 0 {
-        return Err(SyscallError::InvalidArgument);
-    }
-
-    // VFS file descriptor.
-    let handle = crate::sched::with_current_fd_table(|fdt| fdt.get(fd))?;
-    let buf = unsafe { core::slice::from_raw_parts(ptr, len) };
-    let n = crate::fs::vfs::write(handle, buf)?;
-    Ok(n)
 }
 
 // ---------------------------------------------------------------------------
@@ -207,14 +230,112 @@ fn sys_open(args: &[usize; 6]) -> SyscallResult {
 fn sys_close(args: &[usize; 6]) -> SyscallResult {
     let fd = args[0];
 
-    // Closing stdio fds is a no-op.
-    if crate::sched::FdTable::is_stdio(fd) {
-        return Ok(0);
+    // Check if this is a default stdio slot (None in the table).
+    let kind = crate::sched::with_current_fd_table(|fdt| fdt.get_kind(fd));
+    match kind {
+        Ok(None) => return Ok(0), // closing default stdio is a no-op
+        Err(_) => return Ok(0),   // already closed or out of range
+        Ok(Some(_)) => {}         // has a real entry — close it below
     }
 
-    let handle = crate::sched::with_current_fd_table(|fdt| fdt.close(fd))?;
-    crate::fs::vfs::close(handle)?;
+    // Extract the entry from the table (under scheduler lock).
+    let kind = crate::sched::with_current_fd_table(|fdt| fdt.close(fd))?;
+
+    // Close the underlying resource outside the scheduler lock.
+    match kind {
+        FdKind::Vfs(h) => {
+            crate::fs::vfs::close(h)?;
+        }
+        FdKind::Pipe(h) => {
+            crate::ipc::pipe::pipe_close(h);
+        }
+    }
     Ok(0)
+}
+
+// ---------------------------------------------------------------------------
+// sys_pipe(fds_ptr) -> 0
+// ---------------------------------------------------------------------------
+
+fn sys_pipe(args: &[usize; 6]) -> SyscallResult {
+    let fds_ptr = args[0];
+    validate_user_ptr(fds_ptr)?;
+
+    let (read_handle, write_handle) =
+        crate::ipc::pipe::pipe_create().ok_or(SyscallError::NoMemory)?;
+
+    let read_fd = crate::sched::with_current_fd_table(|fdt| fdt.alloc_fd_pipe(read_handle))?;
+
+    let write_fd = match crate::sched::with_current_fd_table(|fdt| fdt.alloc_fd_pipe(write_handle))
+    {
+        Ok(fd) => fd,
+        Err(e) => {
+            // Rollback: close the read fd and both pipe ends.
+            let _ = crate::sched::with_current_fd_table(|fdt| fdt.close(read_fd));
+            crate::ipc::pipe::pipe_close(read_handle);
+            crate::ipc::pipe::pipe_close(write_handle);
+            return Err(e);
+        }
+    };
+
+    // Write [read_fd, write_fd] to user space.
+    let dst = fds_ptr as *mut [i32; 2];
+    unsafe {
+        (*dst)[0] = read_fd as i32;
+        (*dst)[1] = write_fd as i32;
+    }
+
+    Ok(0)
+}
+
+// ---------------------------------------------------------------------------
+// sys_dup2(old_fd, new_fd) -> new_fd
+// ---------------------------------------------------------------------------
+
+fn sys_dup2(args: &[usize; 6]) -> SyscallResult {
+    let old_fd = args[0];
+    let new_fd = args[1];
+
+    if new_fd >= 256 {
+        return Err(SyscallError::InvalidArgument);
+    }
+
+    if old_fd == new_fd {
+        // POSIX: if old_fd == new_fd and old_fd is valid, just return it.
+        // Validate that old_fd is open.
+        let _ = crate::sched::with_current_fd_table(|fdt| fdt.get_kind(old_fd))?;
+        return Ok(new_fd);
+    }
+
+    // Under the scheduler lock: get the source kind, increment pipe refcount
+    // if needed, and place at new_fd. Return any evicted entry for cleanup.
+    let evicted = crate::sched::with_current_fd_table(|fdt| {
+        let source_kind = fdt.get_kind(old_fd)?;
+        let source_kind = source_kind.ok_or(SyscallError::InvalidArgument)?;
+
+        // Increment pipe refcount for the new reference.
+        if let FdKind::Pipe(ref h) = source_kind {
+            crate::ipc::pipe::pipe_clone(h);
+        }
+
+        // Place at new_fd, evicting any existing entry.
+        let old = fdt.set_fd(new_fd, source_kind);
+        Ok(old)
+    })?;
+
+    // Close evicted resource outside the scheduler lock.
+    if let Some(kind) = evicted {
+        match kind {
+            FdKind::Vfs(h) => {
+                let _ = crate::fs::vfs::close(h);
+            }
+            FdKind::Pipe(h) => {
+                crate::ipc::pipe::pipe_close(h);
+            }
+        }
+    }
+
+    Ok(new_fd)
 }
 
 // ---------------------------------------------------------------------------

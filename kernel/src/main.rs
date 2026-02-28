@@ -222,9 +222,12 @@ fn kernel_main(
     // 9. Scheduler.
     sched::init();
 
+    // 10. Pipe subsystem.
+    ipc::pipe::init();
+
     sched::spawn("idle", idle_task);
 
-    // 10. User-mode init process from ELF.
+    // 11. User-mode init process from ELF.
     #[cfg(target_arch = "x86_64")]
     if let Some(ref ramfs) = initramfs {
         let phys_addr = ramfs.ptr.as_ptr() as u64;

@@ -11,4 +11,6 @@ pub const SYS_EXIT: usize = 60;
 pub const SYS_WAIT4: usize = 61;
 pub const SYS_MKDIR: usize = 83;
 pub const SYS_UNLINK: usize = 87;
+pub const SYS_PIPE: usize = 22;
+pub const SYS_DUP2: usize = 33;
 pub const SYS_READDIR: usize = 217;

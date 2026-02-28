@@ -169,18 +169,29 @@ pub fn exit_current() -> ! {
 /// Mark the current task as Dead with the given exit code and yield.
 ///
 /// Encodes the exit code as a standard Unix wait status `(code & 0xFF) << 8`,
-/// reparents children to init, wakes the parent if blocked, then yields.
-/// Does not return.
+/// drains file descriptors (so pipe refcounts are decremented while we can
+/// still safely call into the pipe subsystem), reparents children to init,
+/// wakes the parent if blocked, then yields.  Does not return.
 pub fn exit_current_with_code(code: i32) -> ! {
+    use crate::sched::fd::FdKind;
+
     /// Standard Unix encoding: normal exit status = `(code & 0xFF) << 8`.
     const EXIT_STATUS_SHIFT: i32 = 8;
     const EXIT_CODE_MASK: i32 = 0xFF;
 
     let status = (code & EXIT_CODE_MASK) << EXIT_STATUS_SHIFT;
 
-    {
+    // Phase 1: Under the scheduler lock, drain all fds and mark the task Dead.
+    let fds_to_close = {
         let sched = SCHEDULER.get().expect("scheduler not init");
         let mut guard = sched.lock();
+
+        // Drain all open fds so we can close them outside the lock.
+        let fds = guard
+            .current_task_mut()
+            .and_then(|t| t.fd_table.as_mut())
+            .map(|fdt| fdt.drain_all())
+            .unwrap_or_default();
 
         // Record exit status.
         guard.kill_current_with_status(status);
@@ -194,7 +205,22 @@ pub fn exit_current_with_code(code: i32) -> ! {
         if let Some(parent_id) = guard.current_parent() {
             guard.wake_task(parent_id);
         }
+
+        fds
+    };
+    // Scheduler lock is dropped.
+
+    // Phase 2: Close each fd outside the scheduler lock. Pipe closes may
+    // wake blocked readers/writers (which acquires the scheduler lock).
+    for kind in fds_to_close {
+        match kind {
+            FdKind::Pipe(h) => crate::ipc::pipe::pipe_close(h),
+            FdKind::Vfs(h) => {
+                let _ = crate::fs::vfs::close(h);
+            }
+        }
     }
+
     yield_cpu();
     loop {
         crate::arch::halt_once();
@@ -277,6 +303,18 @@ pub fn block_current_if(should_block: impl FnOnce() -> bool) {
 /// Also sets NEED_RESCHED so that `check_resched` switches to the woken
 /// task on the very next interrupt return, rather than waiting for a timer tick.
 pub fn wake_serial_reader(tid: u64) {
+    let sched = match SCHEDULER.get() {
+        Some(s) => s,
+        None => return,
+    };
+    if sched.lock().wake_task(TaskId(tid)) {
+        NEED_RESCHED.store(true, Ordering::Release);
+    }
+}
+
+/// Wake a task blocked on a pipe read or write. Called from `pipe_close`,
+/// `pipe_read`, and `pipe_write` after releasing the PIPES lock.
+pub fn wake_pipe_task(tid: u64) {
     let sched = match SCHEDULER.get() {
         Some(s) => s,
         None => return,

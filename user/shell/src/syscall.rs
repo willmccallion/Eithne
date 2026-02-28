@@ -19,6 +19,8 @@ const SYS_EXIT: usize = 60;
 const SYS_WAIT4: usize = 61;
 const SYS_MKDIR: usize = 83;
 const SYS_UNLINK: usize = 87;
+const SYS_PIPE: usize = 22;
+const SYS_DUP2: usize = 33;
 const SYS_READDIR: usize = 217;
 
 // Linux O_* flags.
@@ -165,6 +167,16 @@ pub fn sys_exec(path: &str) -> isize {
 /// `pid == usize::MAX` (i.e. -1 as unsigned) means wait for any child.
 pub fn sys_waitpid(pid: usize, status: &mut i32) -> isize {
     unsafe { syscall2(SYS_WAIT4, pid, status as *mut i32 as usize) }
+}
+
+/// Create a pipe. Writes [read_fd, write_fd] into `fds`.
+pub fn sys_pipe(fds: &mut [i32; 2]) -> isize {
+    unsafe { syscall1(SYS_PIPE, fds.as_mut_ptr() as usize) }
+}
+
+/// Duplicate `old_fd` to `new_fd`, closing `new_fd` first if open.
+pub fn sys_dup2(old_fd: usize, new_fd: usize) -> isize {
+    unsafe { syscall2(SYS_DUP2, old_fd, new_fd) }
 }
 
 // ---------------------------------------------------------------------------

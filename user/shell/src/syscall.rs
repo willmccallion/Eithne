@@ -190,6 +190,7 @@ pub struct DirEntry {
     pub d_name: [u8; 256],
 }
 
+#[allow(dead_code)]
 impl DirEntry {
     pub fn name(&self) -> &[u8] {
         &self.d_name[..self.d_name_len as usize]

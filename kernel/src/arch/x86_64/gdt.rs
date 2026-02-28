@@ -206,7 +206,7 @@ pub fn init() {
     }
 
     crate::println!(
-        "[gdt] loaded — CS={:#x} DS={:#x} TSS={:#x} IST1={:#x} IST2={:#x}",
+        "[gdt] loaded - CS={:#x} DS={:#x} TSS={:#x} IST1={:#x} IST2={:#x}",
         KERNEL_CS,
         KERNEL_DS,
         TSS_SEL,

@@ -223,7 +223,7 @@ fn kernel_main(
         sched::spawn_user_from_elf(elf_data);
     }
 
-    println!("[eithne] initialization complete — entering scheduler loop.");
+    println!("[eithne] initialization complete - entering scheduler loop.");
 
     // Yield into the scheduler.  From here the timer IRQ drives preemption.
     sched::yield_cpu();

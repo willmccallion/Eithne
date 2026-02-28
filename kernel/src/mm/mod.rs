@@ -27,7 +27,7 @@ pub fn init(boot_info: &boot_info::BootMemoryInfo) {
     frame::init(boot_info);
 
     crate::println!(
-        "[mm] buddy allocator ready — {} free pages ({} MiB)",
+        "[mm] buddy allocator ready - {} free pages ({} MiB)",
         frame::free_page_count(),
         frame::free_page_count() * page::PAGE_SIZE / (1024 * 1024),
     );

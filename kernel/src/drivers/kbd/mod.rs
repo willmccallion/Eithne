@@ -9,6 +9,10 @@ use core::sync::atomic::{AtomicBool, Ordering};
 /// Shift key state — set on make, cleared on break.
 static SHIFT_HELD: AtomicBool = AtomicBool::new(false);
 
+/// Alt key state — when held, keystrokes are suppressed so the window
+/// manager (e.g. Hyprland) can handle Alt+key combos.
+static ALT_HELD: AtomicBool = AtomicBool::new(false);
+
 /// Scan code set 1 → ASCII (unshifted).
 ///
 /// Index = make code (0x00–0x3A). 0 = no mapping.
@@ -43,12 +47,16 @@ const RSHIFT_MAKE: u8 = 0x36;
 const LSHIFT_BREAK: u8 = 0xAA;
 const RSHIFT_BREAK: u8 = 0xB6;
 
+/// Left Alt make and break codes.
+const LALT_MAKE: u8 = 0x38;
+const LALT_BREAK: u8 = 0xB8;
+
 /// Process a raw PS/2 scan code (set 1).
 ///
 /// On a valid make code, translates to ASCII and pushes to the input buffer.
 /// Called from the IRQ1 handler.
 pub fn handle_scancode(scancode: u8) {
-    // Track shift state.
+    // Track modifier state.
     match scancode {
         LSHIFT_MAKE | RSHIFT_MAKE => {
             SHIFT_HELD.store(true, Ordering::Relaxed);
@@ -56,6 +64,14 @@ pub fn handle_scancode(scancode: u8) {
         }
         LSHIFT_BREAK | RSHIFT_BREAK => {
             SHIFT_HELD.store(false, Ordering::Relaxed);
+            return;
+        }
+        LALT_MAKE => {
+            ALT_HELD.store(true, Ordering::Relaxed);
+            return;
+        }
+        LALT_BREAK => {
+            ALT_HELD.store(false, Ordering::Relaxed);
             return;
         }
         _ => {}
@@ -68,6 +84,12 @@ pub fn handle_scancode(scancode: u8) {
 
     let idx = scancode as usize;
     if idx >= SCANCODE_MAP.len() {
+        return;
+    }
+
+    // Suppress character output when Alt is held so the window manager
+    // (e.g. Hyprland) can handle Alt+key combos like Alt+C to close.
+    if ALT_HELD.load(Ordering::Relaxed) {
         return;
     }
 

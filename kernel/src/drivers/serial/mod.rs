@@ -80,7 +80,12 @@ pub fn read(out: &mut [u8], max: usize) -> usize {
     while count < limit {
         match guard.pop() {
             Some(byte) => {
-                out[count] = byte;
+                // Use write_volatile to ensure the store reaches memory and isn't
+                // elided by the optimiser.  The destination may be a user-space
+                // buffer whose physical page is only reachable through the current
+                // page table; a plain store could theoretically be reordered or
+                // eliminated.
+                unsafe { core::ptr::write_volatile(&mut out[count], byte) };
                 count += 1;
             }
             None => break,

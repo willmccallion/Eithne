@@ -1,3 +1,8 @@
 [workspace]
 resolver = "2"
-members = ["kernel"]
+members = ["kernel", "user/shell"]
+
+[profile.release]
+panic = "abort"
+opt-level = "s"
+lto = true

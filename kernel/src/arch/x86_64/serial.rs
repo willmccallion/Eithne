@@ -45,7 +45,7 @@ const LCR_8N1: u8 = 0x03; // 8 data bits, no parity, 1 stop bit
 const FCR_ENABLE_FIFO: u8 = 0x01;
 const FCR_CLEAR_RX: u8 = 0x02;
 const FCR_CLEAR_TX: u8 = 0x04;
-const FCR_TRIGGER_14: u8 = 0xC0; // 14-byte trigger level
+const FCR_TRIGGER_1: u8 = 0x00; // 1-byte trigger level (interrupt per char)
 
 // ---------------------------------------------------------------------------
 // Modem Control Register bits
@@ -71,10 +71,10 @@ pub fn init() {
         outb(COM1 + REG_IER, 0x00);
         // 8 bits, no parity, one stop bit (clears DLAB).
         outb(COM1 + REG_LCR, LCR_8N1);
-        // Enable FIFO, clear both FIFOs, 14-byte trigger threshold.
+        // Enable FIFO, clear both FIFOs, 1-byte trigger threshold.
         outb(
             COM1 + REG_FCR,
-            FCR_ENABLE_FIFO | FCR_CLEAR_RX | FCR_CLEAR_TX | FCR_TRIGGER_14,
+            FCR_ENABLE_FIFO | FCR_CLEAR_RX | FCR_CLEAR_TX | FCR_TRIGGER_1,
         );
         // Assert DTR, RTS, and OUT2 (OUT2 gates PIC interrupts).
         outb(COM1 + REG_MCR, MCR_DTR | MCR_RTS | MCR_OUT2);

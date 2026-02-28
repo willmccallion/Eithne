@@ -1,14 +1,16 @@
-# eithne kernel — top-level Makefile
+# eithne kernel - top-level Makefile
 #
 # Targets:
-#   make          — build kernel + user programs + ESP image
-#   make kernel   — build only the kernel EFI binary
-#   make user     — build only user-mode programs
-#   make esp      — assemble the ESP directory tree
-#   make run      — build everything and launch QEMU
-#   make clippy   — run clippy with warnings-as-errors
-#   make clean    — remove all build artifacts
-#   make check    — cargo build + clippy
+#   make          - build kernel + user programs + ESP image
+#   make kernel   - build only the kernel EFI binary
+#   make user     - build only user-mode programs
+#   make esp      - assemble the ESP directory tree
+#   make run      - build everything and launch QEMU
+#   make run-gui  - build everything and launch QEMU with framebuffer window
+#   make clippy   - run clippy on all crates
+#   make clean    - remove all build artifacts
+#   make rebuild  - clean + full rebuild
+#   make check    - cargo build + clippy
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -25,18 +27,17 @@ QEMU_ECHR     := 0x02
 
 ifeq ($(ARCH),x86_64)
   UEFI_TARGET := x86_64-unknown-uefi
+  USER_TARGET := x86_64-unknown-none
   OVMF        := /usr/share/edk2/x64/OVMF.4m.fd
   QEMU        := qemu-system-x86_64
   BOOT_FILE   := BOOTX64.EFI
   QEMU_EXTRA  :=
-  AS_FLAGS    := --64
 else ifeq ($(ARCH),aarch64)
   UEFI_TARGET := aarch64-unknown-uefi
   OVMF        := /usr/share/edk2/aarch64/QEMU_EFI.fd
   QEMU        := qemu-system-aarch64
   BOOT_FILE   := BOOTAA64.EFI
   QEMU_EXTRA  := -machine virt -cpu cortex-a72
-  AS_FLAGS    :=
 else
   $(error Unsupported ARCH=$(ARCH). Use x86_64 or aarch64)
 endif
@@ -49,12 +50,9 @@ BUILD_DIR     := target
 ESP_DIR       := $(BUILD_DIR)/esp
 EFI_BINARY    := $(BUILD_DIR)/$(UEFI_TARGET)/release/eithne.efi
 
-# User programs
-USER_SRC_DIR  := user
-USER_LINK     := $(USER_SRC_DIR)/link.ld
-USER_INIT_SRC := $(USER_SRC_DIR)/shell.S
-USER_INIT_OBJ := $(BUILD_DIR)/user/shell.o
-USER_INIT_ELF := $(BUILD_DIR)/user/init
+# User shell (Rust crate)
+USER_SHELL_DIR := user/shell
+USER_INIT_ELF  := $(BUILD_DIR)/$(USER_TARGET)/release/shell
 
 # ESP layout
 ESP_BOOT_DIR  := $(ESP_DIR)/EFI/BOOT
@@ -64,7 +62,7 @@ ESP_APP_DIR   := $(ESP_DIR)/EFI/eithne
 # Phony targets
 # ---------------------------------------------------------------------------
 
-.PHONY: all kernel user esp run run-gui clippy check clean
+.PHONY: all kernel user esp run run-gui clippy check clean rebuild
 
 all: esp
 
@@ -75,7 +73,7 @@ user: $(USER_INIT_ELF)
 esp: $(ESP_BOOT_DIR)/$(BOOT_FILE) $(ESP_APP_DIR)/init
 
 run: esp
-	@echo "==> Launching QEMU ($(ARCH)) — serial only..."
+	@echo "==> Launching QEMU ($(ARCH)) - serial only..."
 	@echo "    Press Ctrl-B X to exit QEMU"
 	@echo ""
 	$(QEMU) \
@@ -87,7 +85,7 @@ run: esp
 		$(QEMU_EXTRA)
 
 run-gui: esp
-	@echo "==> Launching QEMU ($(ARCH)) — GUI + serial..."
+	@echo "==> Launching QEMU ($(ARCH)) - GUI + serial..."
 	@echo "    QEMU window: framebuffer output"
 	@echo "    Terminal:     serial I/O"
 	@echo "    Press Ctrl-B X to exit QEMU"
@@ -102,13 +100,16 @@ run-gui: esp
 		$(QEMU_EXTRA)
 
 clippy:
-	$(CARGO) clippy --target $(UEFI_TARGET) $(CARGO_FLAGS) -- -D warnings
+	$(CARGO) clippy --target $(UEFI_TARGET) $(CARGO_FLAGS) -p eithne -- -D warnings
+	cd $(USER_SHELL_DIR) && $(CARGO) clippy $(CARGO_FLAGS) -- -D warnings
 
 check: kernel clippy
 
 clean:
 	$(CARGO) clean
-	rm -rf $(BUILD_DIR)/user $(ESP_DIR)
+	rm -rf $(ESP_DIR)
+
+rebuild: clean all
 
 # ---------------------------------------------------------------------------
 # Build rules
@@ -117,28 +118,23 @@ clean:
 # Kernel EFI binary
 $(EFI_BINARY): FORCE
 	@echo "==> Building kernel for $(UEFI_TARGET)..."
-	$(CARGO) build --target $(UEFI_TARGET) $(CARGO_FLAGS)
+	$(CARGO) build --target $(UEFI_TARGET) $(CARGO_FLAGS) -p eithne
 
-# User program: assemble
-$(USER_INIT_OBJ): $(USER_INIT_SRC) | $(BUILD_DIR)/user
-	@echo "==> Assembling $(USER_INIT_SRC)..."
-	as $(AS_FLAGS) -o $@ $<
+# User shell (Rust crate)
+$(USER_INIT_ELF): FORCE
+	@echo "==> Building user shell..."
+	cd $(USER_SHELL_DIR) && $(CARGO) build $(CARGO_FLAGS)
 
-# User program: link
-$(USER_INIT_ELF): $(USER_INIT_OBJ) $(USER_LINK) | $(BUILD_DIR)/user
-	@echo "==> Linking user/init..."
-	ld -T $(USER_LINK) -nostdlib -o $@ $(USER_INIT_OBJ)
+# ESP: always re-copy after cargo build (cargo's own dep tracking decides
+# whether the binary actually changed; we just ensure the ESP is current).
+$(ESP_BOOT_DIR)/$(BOOT_FILE): FORCE $(EFI_BINARY) | $(ESP_BOOT_DIR)
+	cp $(EFI_BINARY) $@
 
-# ESP: copy kernel
-$(ESP_BOOT_DIR)/$(BOOT_FILE): $(EFI_BINARY) | $(ESP_BOOT_DIR)
-	cp $< $@
-
-# ESP: copy user init
-$(ESP_APP_DIR)/init: $(USER_INIT_ELF) | $(ESP_APP_DIR)
-	cp $< $@
+$(ESP_APP_DIR)/init: FORCE $(USER_INIT_ELF) | $(ESP_APP_DIR)
+	cp $(USER_INIT_ELF) $@
 
 # Directory creation
-$(BUILD_DIR)/user $(ESP_BOOT_DIR) $(ESP_APP_DIR):
+$(ESP_BOOT_DIR) $(ESP_APP_DIR):
 	mkdir -p $@
 
 # Force cargo to always re-evaluate (it has its own dep tracking)

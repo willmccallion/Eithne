@@ -18,7 +18,7 @@ fn irq_save() -> u64 {
             "pop {rflags}",
             "cli",
             rflags = out(reg) rflags,
-            options(nomem, preserves_flags),
+            options(nomem),
         );
     }
     rflags

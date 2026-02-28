@@ -118,16 +118,18 @@ global_asm!(
     ".align 16",
     ".globl syscall_entry",
     "syscall_entry:",
+    // Save user RSP to a scratch variable without clobbering any GPR.
+    // (Using a register like R15 as scratch would corrupt its value —
+    //  user code legitimately keeps data in callee-saved registers
+    //  across syscalls.)
+    "mov qword ptr [rip + {USER_RSP}], rsp",
     // Switch to kernel stack.
-    // We keep the user RSP in R15 temporarily (it's callee-saved but we
-    // save/restore all GPRs in the frame anyway).
-    "mov r15, rsp",
     "mov rsp, qword ptr [rip + {KSTACK_TOP}]",
     // Build a syscall frame on the kernel stack:
     //   [ss, user_rsp, rflags, cs, rip] — mirrors iretq frame layout
     //   then error_code + vector slots, then all GPRs
     "push 0x23",     // user SS (0x20 | 3)
-    "push r15",      // user RSP
+    "push qword ptr [rip + {USER_RSP}]", // user RSP
     "push r11",      // user RFLAGS (saved by CPU)
     "push 0x1b",     // user CS (0x18 | 3)
     "push rcx",      // user RIP (saved by CPU)
@@ -147,7 +149,7 @@ global_asm!(
     "push r12",
     "push r13",
     "push r14",
-    "push r15",      // user RSP copy
+    "push r15",      // original R15 (preserved)
     // Re-enable interrupts now that we're on the kernel stack.
     "sti",
     // Call the Rust dispatcher: syscall_dispatch(frame: &mut SyscallFrame)
@@ -183,6 +185,7 @@ global_asm!(
     "sysretq",
     dispatch   = sym syscall_dispatch,
     KSTACK_TOP = sym SYSCALL_KSTACK_TOP,
+    USER_RSP   = sym SYSCALL_USER_RSP,
 );
 
 unsafe extern "C" {
@@ -195,6 +198,14 @@ unsafe extern "C" {
 /// this would be per-CPU (GS-relative).
 #[unsafe(no_mangle)]
 pub static mut SYSCALL_KSTACK_TOP: u64 = 0;
+
+/// Scratch storage for the user RSP during syscall entry.
+///
+/// The entry stub saves the user RSP here (without clobbering any GPR)
+/// before switching to the kernel stack.  In a multi-CPU kernel this
+/// would be per-CPU (GS-relative).
+#[unsafe(no_mangle)]
+static mut SYSCALL_USER_RSP: u64 = 0;
 
 /// Update the kernel stack pointer used by the syscall entry stub and the
 /// TSS RSP0 used by hardware interrupts from ring 3.

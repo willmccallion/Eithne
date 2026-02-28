@@ -126,28 +126,51 @@ pub fn exit_current() -> ! {
     }
 }
 
-/// Mark the current task as Blocked and yield the CPU.
+/// Mark the current task as Blocked and yield the CPU, but only if
+/// `should_block` returns true when called with interrupts disabled.
 ///
 /// Used by blocking syscalls (e.g. `sys_read`) when there is no data
 /// available. The task will be woken by `wake_reader()`.
-pub fn block_current_and_yield() {
-    {
+///
+/// The condition check + block + switch are all done under the scheduler's
+/// IRQ-disabling lock. Because interrupts are disabled while the lock is
+/// held, no IRQ can sneak in between the condition check and the state
+/// change — this closes the race where an IRQ pushes data and calls
+/// `wake_reader()` before the task is actually marked Blocked.
+pub fn block_current_if(should_block: impl FnOnce() -> bool) {
+    let pending = {
         let sched = match SCHEDULER.get() {
             Some(s) => s,
             None => return,
         };
-        sched.lock().block_current();
+        let mut guard = sched.lock();
+        // Re-check with interrupts disabled: if data arrived between the
+        // caller's check and us acquiring the lock, don't block.
+        if !should_block() {
+            return;
+        }
+        guard.block_current();
+        guard.prepare_switch()
+    };
+
+    if let Some(p) = pending {
+        activate_task(p.new_kstack_top, p.new_cr3);
+        unsafe { context::yield_now(p.old_rsp_ptr, p.new_rsp) };
     }
-    yield_cpu();
 }
 
 /// Wake the first blocked task. Called from the serial RX IRQ handler.
+///
+/// Also sets NEED_RESCHED so that `check_resched` switches to the woken
+/// task on the very next interrupt return, rather than waiting for a timer tick.
 pub fn wake_reader() {
     let sched = match SCHEDULER.get() {
         Some(s) => s,
         None => return,
     };
-    sched.lock().wake_blocked();
+    if sched.lock().wake_blocked() {
+        NEED_RESCHED.store(true, Ordering::Release);
+    }
 }
 
 /// Cooperatively yield the CPU.

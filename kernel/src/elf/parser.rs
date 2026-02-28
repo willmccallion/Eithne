@@ -14,12 +14,22 @@ const ELF_MAGIC: [u8; 4] = [0x7F, b'E', b'L', b'F'];
 const ELFCLASS64: u8 = 2;
 const ELFDATA2LSB: u8 = 1; // Little-endian
 const ET_EXEC: u16 = 2; // Executable
+const ET_DYN: u16 = 3; // Position-independent executable
 const EM_X86_64: u16 = 62;
 
 pub const PT_LOAD: u32 = 1;
+pub const PT_DYNAMIC: u32 = 2;
 pub const PF_X: u32 = 1;
 pub const PF_W: u32 = 2;
 pub const PF_R: u32 = 4;
+
+// Dynamic section tag constants
+const DT_NULL: i64 = 0;
+const DT_RELA: i64 = 7;
+const DT_RELASZ: i64 = 8;
+
+// Relocation type constants
+pub const R_X86_64_RELATIVE: u32 = 8;
 
 // ---------------------------------------------------------------------------
 // ELF64 header (64 bytes)
@@ -64,6 +74,40 @@ pub struct Elf64Phdr {
 }
 
 const _: () = assert!(mem::size_of::<Elf64Phdr>() == 56);
+
+// ---------------------------------------------------------------------------
+// ELF64 relocation entry with addend (24 bytes)
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Copy)]
+#[repr(C)]
+pub struct Elf64Rela {
+    pub r_offset: u64,
+    pub r_info: u64,
+    pub r_addend: i64,
+}
+
+const _: () = assert!(mem::size_of::<Elf64Rela>() == 24);
+
+impl Elf64Rela {
+    /// Extract the relocation type from r_info.
+    pub fn r_type(&self) -> u32 {
+        (self.r_info & 0xFFFF_FFFF) as u32
+    }
+}
+
+// ---------------------------------------------------------------------------
+// ELF64 dynamic section entry (16 bytes)
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Copy)]
+#[repr(C)]
+struct Elf64Dyn {
+    d_tag: i64,
+    d_val: u64,
+}
+
+const _: () = assert!(mem::size_of::<Elf64Dyn>() == 16);
 
 // ---------------------------------------------------------------------------
 // Parse errors
@@ -112,7 +156,7 @@ impl<'a> Elf64Info<'a> {
         if header.e_ident[5] != ELFDATA2LSB {
             return Err(ElfParseError::NotLittleEndian);
         }
-        if header.e_type != ET_EXEC {
+        if header.e_type != ET_EXEC && header.e_type != ET_DYN {
             return Err(ElfParseError::NotExecutable);
         }
         if header.e_machine != EM_X86_64 {
@@ -163,6 +207,97 @@ impl<'a> Elf64Info<'a> {
         } else {
             None
         }
+    }
+
+    /// True if this is a position-independent executable (ET_DYN).
+    pub fn is_pie(&self) -> bool {
+        self.header.e_type == ET_DYN
+    }
+
+    /// Iterate over all program headers.
+    fn phdrs(&self) -> impl Iterator<Item = &Elf64Phdr> {
+        let count = self.header.e_phnum as usize;
+        let base = self.header.e_phoff as usize;
+
+        (0..count).map(move |i| {
+            let offset = base + i * mem::size_of::<Elf64Phdr>();
+            // SAFETY: We validated that the phdr table fits within data in parse().
+            unsafe { &*(self.data.as_ptr().add(offset) as *const Elf64Phdr) }
+        })
+    }
+
+    /// Find the PT_DYNAMIC program header, if present.
+    fn dynamic_segment(&self) -> Option<&Elf64Phdr> {
+        self.phdrs().find(|phdr| phdr.p_type == PT_DYNAMIC)
+    }
+
+    /// Parse the dynamic segment to find RELA relocation entries.
+    ///
+    /// Returns a slice of `Elf64Rela` entries from the ELF data, or `None`
+    /// if there is no dynamic segment or no RELA entries.
+    pub fn rela_entries(&self) -> Option<&[Elf64Rela]> {
+        let dyn_phdr = self.dynamic_segment()?;
+        let dyn_offset = dyn_phdr.p_offset as usize;
+        let dyn_size = dyn_phdr.p_filesz as usize;
+
+        if dyn_offset + dyn_size > self.data.len() {
+            return None;
+        }
+
+        // Parse dynamic entries to find DT_RELA and DT_RELASZ.
+        let mut rela_offset: Option<u64> = None;
+        let mut rela_size: Option<u64> = None;
+
+        let entry_size = mem::size_of::<Elf64Dyn>();
+        let num_entries = dyn_size / entry_size;
+
+        for i in 0..num_entries {
+            let off = dyn_offset + i * entry_size;
+            // SAFETY: We checked bounds above, Elf64Dyn is repr(C).
+            let dyn_entry = unsafe { &*(self.data.as_ptr().add(off) as *const Elf64Dyn) };
+
+            match dyn_entry.d_tag {
+                DT_NULL => break,
+                DT_RELA => rela_offset = Some(dyn_entry.d_val),
+                DT_RELASZ => rela_size = Some(dyn_entry.d_val),
+                _ => {}
+            }
+        }
+
+        let rela_off = rela_offset? as usize;
+        let rela_sz = rela_size? as usize;
+
+        if rela_sz == 0 {
+            return None;
+        }
+
+        // DT_RELA gives a virtual address; for PIE binaries linked at 0 this
+        // equals the file offset. For ET_EXEC it may differ — find the
+        // containing PT_LOAD segment and convert to a file offset.
+        let file_off = self.vaddr_to_file_offset(rela_off as u64)? as usize;
+
+        if file_off + rela_sz > self.data.len() {
+            return None;
+        }
+
+        let count = rela_sz / mem::size_of::<Elf64Rela>();
+        // SAFETY: We validated bounds, Elf64Rela is repr(C).
+        let slice = unsafe {
+            core::slice::from_raw_parts(self.data.as_ptr().add(file_off) as *const Elf64Rela, count)
+        };
+
+        Some(slice)
+    }
+
+    /// Convert a virtual address (as found in the ELF) to a file offset
+    /// by searching PT_LOAD segments.
+    fn vaddr_to_file_offset(&self, vaddr: u64) -> Option<u64> {
+        for phdr in self.load_segments() {
+            if vaddr >= phdr.p_vaddr && vaddr < phdr.p_vaddr + phdr.p_filesz {
+                return Some(phdr.p_offset + (vaddr - phdr.p_vaddr));
+            }
+        }
+        None
     }
 
     /// The raw ELF data.

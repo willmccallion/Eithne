@@ -100,14 +100,26 @@ fn sys_read(args: &[usize; 6]) -> SyscallResult {
 
     // Stdio fd 0 (stdin) — serial console.
     if fd == 0 {
+        let buf = unsafe { core::slice::from_raw_parts_mut(ptr, len) };
+
         loop {
-            let buf = unsafe { core::slice::from_raw_parts_mut(ptr, len) };
             let n = crate::drivers::serial::read(buf, len);
             if n > 0 {
                 return Ok(n);
             }
+            // Block only if the buffer is still empty.  The condition closure
+            // runs with interrupts disabled (inside the scheduler's IrqSpinlock),
+            // so no IRQ can push data between this check and the actual block.
             crate::drivers::serial::READER_BLOCKED.store(true, Ordering::Release);
-            crate::sched::block_current_and_yield();
+            crate::sched::block_current_if(|| {
+                if crate::drivers::serial::is_empty() {
+                    true // buffer still empty → block
+                } else {
+                    // Data arrived between read() and here; cancel the block.
+                    crate::drivers::serial::READER_BLOCKED.store(false, Ordering::Release);
+                    false
+                }
+            });
         }
     }
 

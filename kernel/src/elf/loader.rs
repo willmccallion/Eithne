@@ -10,7 +10,7 @@ use crate::mm::frame;
 use crate::mm::page::PAGE_SIZE;
 use crate::mm::traits::{PageFlags, PageMapper};
 
-use super::parser::{Elf64Info, Elf64Phdr, PF_W, PF_X};
+use super::parser::{Elf64Info, Elf64Phdr, PF_W, PF_X, R_X86_64_RELATIVE};
 
 // ---------------------------------------------------------------------------
 // Errors
@@ -23,6 +23,7 @@ pub enum ElfLoadError {
     FrameAlloc,
     Map(crate::mm::traits::MapError),
     BadSegmentData,
+    Relocation,
 }
 
 impl From<super::parser::ElfParseError> for ElfLoadError {
@@ -81,6 +82,9 @@ pub fn load_elf(elf: &Elf64Info) -> Result<LoadedElf, ElfLoadError> {
     for phdr in elf.load_segments() {
         map_segment(&mut aspace, elf, phdr, reloc_offset)?;
     }
+
+    // Apply relocations for PIE binaries.
+    apply_relocations(&aspace, elf, reloc_offset)?;
 
     // Map user stack.
     let stack_top = user_base + USER_STACK_OFFSET;
@@ -142,36 +146,32 @@ fn map_segment(
 
     for page_idx in 0..total_pages {
         let page_virt = aligned_start + (page_idx * PAGE_SIZE) as u64;
-        let page_phys = frame::alloc_frame().ok_or(ElfLoadError::FrameAlloc)?;
 
-        // Zero the entire page first (handles BSS and partial pages).
-        let page_ptr = phys_to_virt(page_phys).as_mut_ptr::<u8>();
-        unsafe {
-            core::ptr::write_bytes(page_ptr, 0, PAGE_SIZE);
-        }
+        // Check if this page was already mapped by a previous segment.
+        let (page_ptr, already_mapped) =
+            if let Some(existing_phys) = aspace.translate(VirtAddr::new(page_virt)) {
+                // Page already mapped — reuse the existing frame.
+                let phys_page = PhysAddr::new(existing_phys.as_u64() & !(PAGE_SIZE as u64 - 1));
+                (phys_to_virt(phys_page).as_mut_ptr::<u8>(), true)
+            } else {
+                // Allocate a new frame and zero it.
+                let page_phys = frame::alloc_frame().ok_or(ElfLoadError::FrameAlloc)?;
+                let ptr = phys_to_virt(page_phys).as_mut_ptr::<u8>();
+                unsafe {
+                    core::ptr::write_bytes(ptr, 0, PAGE_SIZE);
+                }
+                aspace.map(VirtAddr::new(page_virt), page_phys, flags)?;
+                (ptr, false)
+            };
+        let _ = already_mapped;
 
         // Copy file data into this page.
         if file_copied < filesz {
-            let page_start_in_seg = if page_idx == 0 {
-                offset_in_first_page
-            } else {
-                0
-            };
             let dst_offset = if page_idx == 0 {
                 offset_in_first_page
             } else {
                 0
             };
-
-            // How much of this page overlaps with file data?
-            let seg_offset = page_idx * PAGE_SIZE
-                - (if page_idx == 0 {
-                    0
-                } else {
-                    offset_in_first_page
-                });
-            let _ = seg_offset;
-            let _ = page_start_in_seg;
 
             // Bytes available in this page for data
             let space_in_page = PAGE_SIZE - dst_offset;
@@ -187,8 +187,56 @@ fn map_segment(
                 file_copied += copy_len;
             }
         }
+    }
 
-        aspace.map(VirtAddr::new(page_virt), page_phys, flags)?;
+    Ok(())
+}
+
+/// Apply ELF relocations to the loaded binary.
+///
+/// For PIE (ET_DYN) binaries, patches R_X86_64_RELATIVE entries so that
+/// absolute addresses in the GOT point to the correct relocated addresses.
+/// For ET_EXEC binaries with no relocations, this is a no-op.
+fn apply_relocations(
+    aspace: &KernelAddressSpace,
+    elf: &Elf64Info,
+    reloc_offset: u64,
+) -> Result<(), ElfLoadError> {
+    let rela_entries = match elf.rela_entries() {
+        Some(entries) => entries,
+        None => return Ok(()), // No relocations — backwards compat with ET_EXEC
+    };
+
+    for rela in rela_entries {
+        if rela.r_type() != R_X86_64_RELATIVE {
+            continue;
+        }
+
+        let target_vaddr = rela.r_offset + reloc_offset;
+        let value = (reloc_offset as i64 + rela.r_addend) as u64;
+
+        write_to_user(aspace, target_vaddr, value)?;
+    }
+
+    Ok(())
+}
+
+/// Write a u64 value to a user-space virtual address via the kernel mapping.
+///
+/// Translates the user vaddr to a physical address, then accesses it through
+/// the kernel's identity map to perform the write.
+fn write_to_user(aspace: &KernelAddressSpace, vaddr: u64, value: u64) -> Result<(), ElfLoadError> {
+    let phys = aspace
+        .translate(VirtAddr::new(vaddr))
+        .ok_or(ElfLoadError::Relocation)?;
+
+    let kern_ptr = phys_to_virt(phys).as_mut_ptr::<u64>();
+
+    // SAFETY: The page was mapped and zeroed by map_segment, and phys_to_virt
+    // gives us a kernel-accessible pointer. We use write_unaligned because the
+    // GOT entry may not be 8-byte aligned within the page.
+    unsafe {
+        kern_ptr.write_unaligned(value);
     }
 
     Ok(())

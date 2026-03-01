@@ -272,10 +272,10 @@ impl RoundRobinScheduler {
         if self.queue.iter().any(|t| t.parent == Some(parent)) {
             return true;
         }
-        if let Some(ref cur) = self.current {
-            if cur.parent == Some(parent) {
-                return true;
-            }
+        if let Some(ref cur) = self.current
+            && cur.parent == Some(parent)
+        {
+            return true;
         }
         false
     }
@@ -296,10 +296,10 @@ impl RoundRobinScheduler {
 
     /// Find any task by ID (current or queued) and return a mutable reference.
     pub fn find_task_mut(&mut self, id: TaskId) -> Option<&mut Task> {
-        if let Some(ref mut cur) = self.current {
-            if cur.id == id {
-                return Some(cur);
-            }
+        if let Some(ref mut cur) = self.current
+            && cur.id == id
+        {
+            return Some(cur);
         }
         self.queue.iter_mut().find(|t| t.id == id)
     }

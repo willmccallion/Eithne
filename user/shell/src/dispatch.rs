@@ -61,7 +61,7 @@ pub fn dispatch_command(input: &[u8], cwd: &mut [u8; 256], cwd_len: &mut usize) 
             let mut status: i32 = 0;
             loop {
                 let ret = sys_waitpid(pid as usize, &mut status);
-                if ret == -(4 as isize) {
+                if ret == -4_isize {
                     continue; // EINTR
                 }
                 if ret < 0 {

@@ -27,9 +27,9 @@ pub fn cmd_pipeline(input: &[u8], cwd: &[u8]) {
         if ret < 0 {
             print_error("pipe", ret);
             // Clean up any already-created pipes.
-            for j in 0..i {
-                sys_close(pipes[j][0] as usize);
-                sys_close(pipes[j][1] as usize);
+            for pipe in &pipes[..i] {
+                sys_close(pipe[0] as usize);
+                sys_close(pipe[1] as usize);
             }
             return;
         }
@@ -64,9 +64,9 @@ pub fn cmd_pipeline(input: &[u8], cwd: &[u8]) {
             }
 
             // Close all pipe fds in the child (they've been dup2'd as needed).
-            for j in 0..n - 1 {
-                sys_close(pipes[j][0] as usize);
-                sys_close(pipes[j][1] as usize);
+            for pipe in &pipes[..n - 1] {
+                sys_close(pipe[0] as usize);
+                sys_close(pipe[1] as usize);
             }
 
             // Dispatch this stage's command.
@@ -84,19 +84,19 @@ pub fn cmd_pipeline(input: &[u8], cwd: &[u8]) {
     }
 
     // Parent: close all pipe fds.
-    for j in 0..n - 1 {
-        sys_close(pipes[j][0] as usize);
-        sys_close(pipes[j][1] as usize);
+    for pipe in &pipes[..n - 1] {
+        sys_close(pipe[0] as usize);
+        sys_close(pipe[1] as usize);
     }
 
     // Wait for all children, retrying on EINTR.
     if fork_ok {
-        for i in 0..n {
-            if pids[i] > 0 {
+        for &pid in &pids[..n] {
+            if pid > 0 {
                 let mut status: i32 = 0;
                 loop {
-                    let ret = sys_waitpid(pids[i] as usize, &mut status);
-                    if ret == -(4 as isize) {
+                    let ret = sys_waitpid(pid as usize, &mut status);
+                    if ret == -4_isize {
                         continue; // EINTR
                     }
                     break;

@@ -20,14 +20,10 @@ const SYS_WAIT4: usize = 61;
 const SYS_MKDIR: usize = 83;
 const SYS_UNLINK: usize = 87;
 const SYS_SIGACTION: usize = 13;
-const SYS_SIGPROCMASK: usize = 14;
 const SYS_PIPE: usize = 22;
 const SYS_DUP2: usize = 33;
-const SYS_GETPID: usize = 39;
 const SYS_KILL: usize = 62;
-const SYS_GETCWD: usize = 79;
 const SYS_CHDIR: usize = 80;
-const SYS_GETPPID: usize = 110;
 const SYS_BRK: usize = 12;
 const SYS_READDIR: usize = 217;
 
@@ -160,6 +156,7 @@ pub fn sys_exit(code: usize) -> ! {
     unsafe {
         syscall1(SYS_EXIT, code);
     }
+    #[allow(clippy::empty_loop)]
     loop {}
 }
 
@@ -202,29 +199,6 @@ pub fn sys_kill(pid: usize, sig: usize) -> isize {
 /// Register a signal handler.
 pub fn sys_sigaction(sig: usize, new_act: usize, old_act: usize) -> isize {
     unsafe { syscall3(SYS_SIGACTION, sig, new_act, old_act) }
-}
-
-/// Modify the signal mask.
-pub fn sys_sigprocmask(how: usize, set: usize, oldset: usize) -> isize {
-    unsafe { syscall3(SYS_SIGPROCMASK, how, set, oldset) }
-}
-
-/// Get the current process ID.
-pub fn sys_getpid() -> isize {
-    unsafe { syscall0(SYS_GETPID) }
-}
-
-/// Get the parent process ID.
-pub fn sys_getppid() -> isize {
-    unsafe { syscall0(SYS_GETPPID) }
-}
-
-/// Get the current working directory.
-///
-/// Writes the NUL-terminated path into `buf`. Returns the number of bytes
-/// written (including the NUL terminator) on success, or a negative errno.
-pub fn sys_getcwd(buf: &mut [u8]) -> isize {
-    unsafe { syscall2(SYS_GETCWD, buf.as_mut_ptr() as usize, buf.len()) }
 }
 
 /// Change the current working directory.

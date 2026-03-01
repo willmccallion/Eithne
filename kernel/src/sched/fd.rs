@@ -149,7 +149,7 @@ impl FdTable {
                     FdKind::Pipe(handle) => {
                         crate::ipc::pipe::pipe_clone(handle);
                         Some(FdEntry {
-                            kind: FdKind::Pipe(handle.clone()),
+                            kind: FdKind::Pipe(*handle),
                             cloexec: entry.cloexec,
                         })
                     }
@@ -176,11 +176,11 @@ impl FdTable {
     pub fn close_cloexec(&mut self) -> Vec<FdKind> {
         let mut kinds = Vec::new();
         for slot in self.entries.iter_mut() {
-            if let Some(entry) = slot.as_ref() {
-                if entry.cloexec {
-                    kinds.push(entry.kind.clone());
-                    *slot = None;
-                }
+            if let Some(entry) = slot.as_ref()
+                && entry.cloexec
+            {
+                kinds.push(entry.kind.clone());
+                *slot = None;
             }
         }
         kinds

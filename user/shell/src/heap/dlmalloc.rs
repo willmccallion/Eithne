@@ -189,7 +189,7 @@ impl BinHead {
 
     unsafe fn is_empty(&self) -> bool {
         let self_as_chunk = self as *const BinHead as *const Chunk;
-        self.fd as *const Chunk == self_as_chunk
+        core::ptr::eq(self.fd as *const Chunk, self_as_chunk)
     }
 
     fn as_chunk_ptr(&mut self) -> *mut Chunk {

@@ -11,8 +11,10 @@ use super::Allocator;
 
 /// A bump allocator that grows the heap via `sbrk` and never reuses freed
 /// memory.
+#[allow(dead_code)]
 pub struct BumpAllocator;
 
+#[allow(dead_code)]
 impl BumpAllocator {
     pub const fn new() -> Self {
         Self

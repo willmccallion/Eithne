@@ -30,24 +30,37 @@ pub fn read_line(buf: &mut [u8; LINE_MAX], cwd: &[u8]) -> usize {
                 return len;
             }
             // Backspace (BS or DEL)
-            0x08 | 0x7F => {
-                if len > 0 {
-                    len -= 1;
-                    print_bytes(&[0x08, b' ', 0x08]);
-                }
+            0x08 | 0x7F if len > 0 => {
+                len -= 1;
+                print_bytes(&[0x08, b' ', 0x08]);
             }
             // Tab — autocomplete command name
             b'\t' => {
                 try_complete(buf, &mut len, cwd);
             }
-            // Normal printable character
-            _ => {
-                if len < LINE_MAX {
-                    buf[len] = c;
-                    len += 1;
-                    print_bytes(&[c]);
+            // Escape: consume the full ANSI sequence so it doesn't leak
+            // into the line buffer (e.g. arrow keys send \x1b[A).
+            0x1b => {
+                let mut seq = [0u8; 1];
+                let n2 = sys_read(STDIN, &mut seq);
+                if n2 > 0 && seq[0] == b'[' {
+                    // CSI sequence — read until a letter (0x40..0x7E).
+                    loop {
+                        let n3 = sys_read(STDIN, &mut seq);
+                        if n3 <= 0 || (seq[0] >= 0x40 && seq[0] <= 0x7E) {
+                            break;
+                        }
+                    }
                 }
             }
+            // Normal printable character (0x20..=0x7E)
+            0x20..=0x7E if len < LINE_MAX => {
+                buf[len] = c;
+                len += 1;
+                print_bytes(&[c]);
+            }
+            // Ignore all other non-printable bytes.
+            _ => {}
         }
     }
 }
@@ -75,11 +88,9 @@ fn try_complete(buf: &mut [u8; LINE_MAX], len: &mut usize, cwd: &[u8]) {
     let mut matches = [0u8; 16];
     let mut count: usize = 0;
     for (idx, cmd) in COMMANDS.iter().enumerate() {
-        if cmd.len() >= prefix.len() && cmd[..prefix.len()] == *prefix {
-            if count < matches.len() {
-                matches[count] = idx as u8;
-                count += 1;
-            }
+        if cmd.len() >= prefix.len() && cmd[..prefix.len()] == *prefix && count < matches.len() {
+            matches[count] = idx as u8;
+            count += 1;
         }
     }
 
@@ -100,7 +111,7 @@ fn try_complete(buf: &mut [u8; LINE_MAX], len: &mut usize, cwd: &[u8]) {
         if *len < LINE_MAX {
             buf[*len] = b' ';
             *len += 1;
-            print_bytes(&[b' ']);
+            print_bytes(b" ");
         }
     } else {
         // Multiple matches — print them, then reprint prompt + input.

@@ -572,9 +572,9 @@ fn marshal_argv_on_stack(stack_top: u64, args: &[alloc::string::String]) -> (u64
 
     let argv_ptr = sp;
     let arr = sp as *mut u64;
-    for i in 0..argc {
+    for (i, &addr) in string_addrs[..argc].iter().enumerate() {
         unsafe {
-            *arr.add(i) = string_addrs[i];
+            *arr.add(i) = addr;
         }
     }
     unsafe {

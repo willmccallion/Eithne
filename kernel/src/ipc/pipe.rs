@@ -75,8 +75,8 @@ impl PipeInner {
     /// Copy up to `dst.len()` bytes out of the ring buffer.
     fn read_into(&mut self, dst: &mut [u8]) -> usize {
         let n = dst.len().min(self.count);
-        for i in 0..n {
-            dst[i] = self.buf[self.read_pos];
+        for byte in dst[..n].iter_mut() {
+            *byte = self.buf[self.read_pos];
             self.read_pos = (self.read_pos + 1) % PIPE_BUF_SIZE;
         }
         self.count -= n;
@@ -87,8 +87,8 @@ impl PipeInner {
     fn write_from(&mut self, src: &[u8]) -> usize {
         let space = PIPE_BUF_SIZE - self.count;
         let n = src.len().min(space);
-        for i in 0..n {
-            self.buf[self.write_pos] = src[i];
+        for &byte in &src[..n] {
+            self.buf[self.write_pos] = byte;
             self.write_pos = (self.write_pos + 1) % PIPE_BUF_SIZE;
         }
         self.count += n;

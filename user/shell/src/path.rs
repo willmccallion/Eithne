@@ -125,7 +125,7 @@ pub fn trim(b: &[u8]) -> &[u8] {
 pub fn parse_usize(b: &[u8]) -> usize {
     let mut n: usize = 0;
     for &c in b {
-        if c >= b'0' && c <= b'9' {
+        if c.is_ascii_digit() {
             n = n * 10 + (c - b'0') as usize;
         } else {
             break;

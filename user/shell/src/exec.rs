@@ -138,7 +138,7 @@ pub fn cmd_run(args: &[u8], cwd: &[u8]) {
         let mut status: i32 = 0;
         loop {
             let ret = sys_waitpid(pid as usize, &mut status);
-            if ret == -(4 as isize) {
+            if ret == -4_isize {
                 // EINTR — interrupted by signal, retry.
                 continue;
             }

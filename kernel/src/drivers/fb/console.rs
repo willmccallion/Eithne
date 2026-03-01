@@ -175,13 +175,13 @@ fn dispatch_csi(con: &mut FbConsole, fb: &super::FrameBuffer, cmd: u8) {
                 apply_sgr(con, p);
             }
         }
-        b'J' => {
+        b'J'
             // Erase in Display
-            if parse_single_param(buf) == 2 {
-                clear(fb, con.bg.0, con.bg.1, con.bg.2);
-                con.col = 0;
-                con.row = 0;
-            }
+            if parse_single_param(buf) == 2 =>
+        {
+            clear(fb, con.bg.0, con.bg.1, con.bg.2);
+            con.col = 0;
+            con.row = 0;
         }
         b'H' => {
             // Cursor Position — params are 1-based

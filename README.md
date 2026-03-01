@@ -85,13 +85,13 @@ Cooperative + preemptive round-robin. The IRQ0 timer fires at ~18.2 Hz; after 10
 
 ```mermaid
 stateDiagram-v2
-    [*] --> Ready : sched::spawn()
+    [*] --> Ready : spawn
     Ready --> Running : scheduler selects
-    Running --> Ready : yield_cpu() or timer preempt
+    Running --> Ready : yield or timer preempt
     Running --> Blocked : wait for event
     Blocked --> Ready : event fires
     Running --> Dead : task returns
-    Dead --> [*] : parent waitpid
+    Dead --> [*] : waitpid
 ```
 
 **Context switch** (`switch_context` in assembly): saves callee-saved registers (RBX, RBP, R12–R15) and RSP onto the current task's kernel stack; loads the next task's RSP and pops its saved state. `iretq` restores RIP, CS, RFLAGS, RSP, SS — returning into the new task wherever it last yielded or was preempted.

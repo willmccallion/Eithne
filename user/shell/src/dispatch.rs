@@ -83,6 +83,7 @@ fn dispatch_simple(input: &[u8], cwd: &mut [u8; 256], cwd_len: &mut usize) {
     let (cmd, args) = split_first(input);
 
     match cmd {
+        b"alloc" => cmd_alloc(args),
         b"help" => cmd_help(),
         b"echo" => cmd_echo(args),
         b"ls" => cmd_ls(args, &cwd[..*cwd_len]),

@@ -28,6 +28,7 @@ const SYS_KILL: usize = 62;
 const SYS_GETCWD: usize = 79;
 const SYS_CHDIR: usize = 80;
 const SYS_GETPPID: usize = 110;
+const SYS_BRK: usize = 12;
 const SYS_READDIR: usize = 217;
 
 // Linux O_* flags.
@@ -229,6 +230,37 @@ pub fn sys_getcwd(buf: &mut [u8]) -> isize {
 /// Change the current working directory.
 pub fn sys_chdir(path: &str) -> isize {
     with_cstr(path, |ptr| unsafe { syscall1(SYS_CHDIR, ptr as usize) })
+}
+
+// ---------------------------------------------------------------------------
+// brk / sbrk
+// ---------------------------------------------------------------------------
+
+/// Adjust the program break by `increment` bytes.
+///
+/// Returns a pointer to the start of the newly allocated region on success,
+/// or a null pointer on failure.  If `increment` is 0, returns the current
+/// break without changing it.
+pub fn sys_sbrk(increment: isize) -> *mut u8 {
+    let current = unsafe { syscall1(SYS_BRK, 0) };
+    if current < 0 {
+        return core::ptr::null_mut();
+    }
+    let current = current as usize;
+    if increment == 0 {
+        return current as *mut u8;
+    }
+    let new_brk = if increment > 0 {
+        current + increment as usize
+    } else {
+        current.wrapping_sub((-increment) as usize)
+    };
+    let result = unsafe { syscall1(SYS_BRK, new_brk) };
+    if result < 0 {
+        core::ptr::null_mut()
+    } else {
+        current as *mut u8 // return OLD break (start of newly allocated region)
+    }
 }
 
 // Signal constants.

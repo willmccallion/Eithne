@@ -6,6 +6,7 @@ use core::sync::atomic::Ordering;
 use super::table::*;
 use super::traits::{SyscallError, SyscallResult};
 use crate::fs::traits::{DirEntry, FileType, OpenFlags};
+use crate::mm::traits::PageMapper;
 use crate::sched::fd::FdKind;
 
 /// Kernel virtual address boundary — pointers at or above this are kernel space.
@@ -24,6 +25,7 @@ pub fn dispatch(num: usize, args: &[usize; 6]) -> SyscallResult {
         SYS_OPEN => sys_open(args),
         SYS_CLOSE => sys_close(args),
         SYS_STAT => sys_stat(args),
+        SYS_BRK => sys_brk(args),
         SYS_PIPE => sys_pipe(args),
         SYS_DUP2 => sys_dup2(args),
         SYS_FORK | SYS_EXECVE => unreachable!("handled in arch syscall layer"),
@@ -740,4 +742,99 @@ fn sys_sigprocmask(args: &[usize; 6]) -> SyscallResult {
     }
 
     Ok(0)
+}
+
+// ---------------------------------------------------------------------------
+// sys_brk(new_brk) -> current_brk
+// ---------------------------------------------------------------------------
+//
+// If new_brk == 0, returns the current program break.
+// Otherwise, grows or shrinks the heap by mapping/unmapping pages.
+
+fn sys_brk(args: &[usize; 6]) -> SyscallResult {
+    use crate::mm::addr::VirtAddr;
+    use crate::mm::page::PAGE_SIZE;
+    use crate::mm::traits::PageFlags;
+
+    let requested = args[0] as u64;
+
+    // brk(0): query current break.
+    if requested == 0 {
+        return crate::sched::with_current_task(|t| Ok(t.brk as usize));
+    }
+
+    // Page-align the request upward.
+    let page_mask = (PAGE_SIZE as u64) - 1;
+    let new_brk = (requested + page_mask) & !page_mask;
+
+    let cur_brk = crate::sched::with_current_task(|t| Ok(t.brk as usize))? as u64;
+
+    if new_brk == cur_brk {
+        return Ok(new_brk as usize);
+    }
+
+    if new_brk > cur_brk {
+        // Growing: allocate and map new pages.
+        let mut addr = cur_brk;
+        while addr < new_brk {
+            let frame =
+                crate::mm::frame::alloc_frame().ok_or(SyscallError::NoMemory)?;
+
+            // Zero the frame.
+            unsafe {
+                let dst = crate::mm::addr::phys_to_virt(frame).as_mut_ptr::<u8>();
+                core::ptr::write_bytes(dst, 0, PAGE_SIZE);
+            }
+
+            // Map into the current task's address space.
+            let result = crate::sched::with_current_task(|task| {
+                let aspace = task
+                    .aspace
+                    .as_mut()
+                    .ok_or(SyscallError::InvalidArgument)?;
+                aspace
+                    .map(VirtAddr::new(addr), frame, PageFlags::USER_RW)
+                    .map_err(|_| SyscallError::NoMemory)?;
+                Ok(())
+            });
+
+            if let Err(e) = result {
+                crate::mm::frame::dealloc_frame(frame);
+                return Err(e);
+            }
+
+            addr += PAGE_SIZE as u64;
+        }
+
+        // Update the task's brk.
+        crate::sched::with_current_task(|t| {
+            t.brk = new_brk;
+            Ok(new_brk as usize)
+        })
+    } else {
+        // Shrinking: unmap pages from new_brk to cur_brk.
+        let mut addr = new_brk;
+        while addr < cur_brk {
+            let _ = crate::sched::with_current_task(|task| {
+                let aspace = task
+                    .aspace
+                    .as_mut()
+                    .ok_or(SyscallError::InvalidArgument)?;
+                match aspace.unmap(VirtAddr::new(addr)) {
+                    Ok(phys) => {
+                        crate::mm::frame::dealloc_frame(phys);
+                        Ok(())
+                    }
+                    Err(_) => Ok(()), // page wasn't mapped, skip
+                }
+            });
+            addr += PAGE_SIZE as u64;
+        }
+
+        // Update the task's brk.
+        crate::sched::with_current_task(|t| {
+            t.brk = new_brk;
+            Ok(new_brk as usize)
+        })
+    }
 }

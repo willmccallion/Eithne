@@ -397,10 +397,13 @@ fn do_fork(parent_frame: &SyscallFrame) -> u64 {
         // Clone cwd.
         let child_cwd = cur.cwd.clone();
 
-        Ok((parent_id, aspace, fdt, sig_state, child_cwd))
+        // Clone program break.
+        let child_brk = cur.brk;
+
+        Ok((parent_id, aspace, fdt, sig_state, child_cwd, child_brk))
     });
 
-    let (parent_id, child_aspace, child_fdt, child_signals, child_cwd) = match result {
+    let (parent_id, child_aspace, child_fdt, child_signals, child_cwd, child_brk) = match result {
         Some(Ok(v)) => v,
         Some(Err(e)) => return e.wrapping_neg(),
         None => return ENOMEM.wrapping_neg(),
@@ -466,6 +469,7 @@ fn do_fork(parent_frame: &SyscallFrame) -> u64 {
         exit_code: None,
         signals: child_signals,
         cwd: child_cwd,
+        brk: child_brk,
     };
 
     crate::sched::add_task(child_task);
@@ -646,6 +650,9 @@ fn do_exec(frame: &mut SyscallFrame) {
 
             // Replace address space (old one is dropped, freeing pages).
             task.aspace = Some(loaded.aspace);
+
+            // Set the new program break.
+            task.brk = loaded.brk;
 
             // POSIX exec: reset caught signals to SIG_DFL, clear pending.
             // SIG_IGN dispositions are preserved across exec.

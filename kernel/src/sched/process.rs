@@ -34,6 +34,8 @@ pub struct Task {
     pub signals: Option<crate::ipc::signal::SignalState>,
     /// Current working directory. None for kernel threads.
     pub cwd: Option<String>,
+    /// Current program break (end of heap). 0 for kernel threads.
+    pub brk: u64,
 }
 
 impl Task {
@@ -55,6 +57,7 @@ impl Task {
             exit_code: None,
             signals: None,
             cwd: None,
+            brk: 0,
         })
     }
 }

@@ -13,8 +13,8 @@ pub const CLR_BLUE: &str = "\x1b[1;34m";
 pub const CLR_CYAN: &str = "\x1b[1;36m";
 
 pub const COMMANDS: &[&[u8]] = &[
-    b"cat", b"cd", b"clear", b"echo", b"exit", b"help", b"kill", b"ls", b"mkdir", b"pwd", b"rm",
-    b"run", b"stat", b"write",
+    b"alloc", b"cat", b"cd", b"clear", b"echo", b"exit", b"help", b"kill", b"ls", b"mkdir",
+    b"pwd", b"rm", b"run", b"stat", b"write",
 ];
 
 pub fn print(s: &str) {
@@ -52,6 +52,29 @@ pub fn print_isize(v: isize) {
     } else {
         print_num(v as u64);
     }
+}
+
+pub fn print_hex(mut n: u64) {
+    if n == 0 {
+        print("0x0");
+        return;
+    }
+    let mut buf = [0u8; 18]; // "0x" + 16 hex digits
+    buf[0] = b'0';
+    buf[1] = b'x';
+    let mut i = 18;
+    while n > 0 {
+        i -= 1;
+        let digit = (n & 0xF) as u8;
+        buf[i] = if digit < 10 {
+            b'0' + digit
+        } else {
+            b'a' + digit - 10
+        };
+        n >>= 4;
+    }
+    print_bytes(&buf[..2]); // "0x"
+    print_bytes(&buf[i..]);
 }
 
 pub fn print_error(msg: &str, errno: isize) {

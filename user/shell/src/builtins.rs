@@ -1,3 +1,5 @@
+extern crate alloc;
+
 use core::mem;
 
 use crate::io::*;
@@ -6,6 +8,11 @@ use crate::syscall::*;
 
 pub fn cmd_help() {
     print("commands:\n");
+    print("  ");
+    print(CLR_BOLD);
+    print("alloc");
+    print(CLR_RESET);
+    print("             test heap allocation\n");
     print("  ");
     print(CLR_BOLD);
     print("help");
@@ -288,6 +295,113 @@ pub fn cmd_kill(args: &[u8]) {
         print(CLR_RESET);
         print(": kill failed\n");
     }
+}
+
+pub fn cmd_alloc(_args: &[u8]) {
+    // Test 1: raw sbrk allocation.
+    let ptr = sys_sbrk(4096);
+    if ptr.is_null() {
+        print(CLR_RED);
+        print("error");
+        print(CLR_RESET);
+        print(": sbrk failed\n");
+        return;
+    }
+    print("sbrk(4096) = ");
+    print_hex(ptr as u64);
+    print("\n");
+
+    // Write and verify a pattern.
+    unsafe {
+        for i in 0..4096u16 {
+            *ptr.add(i as usize) = (i & 0xFF) as u8;
+        }
+        let mut ok = true;
+        for i in 0..4096u16 {
+            if *ptr.add(i as usize) != (i & 0xFF) as u8 {
+                ok = false;
+                break;
+            }
+        }
+        if ok {
+            print("sbrk: 4096 bytes verified ");
+            print(CLR_GREEN);
+            print("OK");
+            print(CLR_RESET);
+            print("\n");
+        } else {
+            print(CLR_RED);
+            print("error");
+            print(CLR_RESET);
+            print(": sbrk memory verification failed\n");
+            return;
+        }
+    }
+
+    // Test 2: alloc crate (Vec via dlmalloc).
+    {
+        use alloc::vec::Vec;
+        let mut v: Vec<u32> = Vec::new();
+        for i in 0..100u32 {
+            v.push(i * i);
+        }
+        let mut ok = true;
+        for i in 0..100u32 {
+            if v[i as usize] != i * i {
+                ok = false;
+                break;
+            }
+        }
+        if ok {
+            print("Vec<u32>: 100 elements verified ");
+            print(CLR_GREEN);
+            print("OK");
+            print(CLR_RESET);
+            print("\n");
+        } else {
+            print(CLR_RED);
+            print("error");
+            print(CLR_RESET);
+            print(": Vec verification failed\n");
+            return;
+        }
+    }
+
+    // Test 3: String via dlmalloc.
+    {
+        use alloc::string::String;
+        let mut s = String::new();
+        s.push_str("hello from the heap!");
+        print("String: \"");
+        print_bytes(s.as_bytes());
+        print("\" ");
+        print(CLR_GREEN);
+        print("OK");
+        print(CLR_RESET);
+        print("\n");
+    }
+
+    // Test 4: allocation + deallocation cycle.
+    {
+        use alloc::vec::Vec;
+        for round in 0..3u32 {
+            let mut v: Vec<u8> = Vec::with_capacity(1024);
+            for i in 0..1024u16 {
+                v.push((i & 0xFF) as u8);
+            }
+            drop(v); // should be freed by dlmalloc
+            let _ = round;
+        }
+        print("alloc/dealloc cycle: 3 rounds ");
+        print(CLR_GREEN);
+        print("OK");
+        print(CLR_RESET);
+        print("\n");
+    }
+
+    print("current brk = ");
+    print_hex(sys_sbrk(0) as u64);
+    print("\n");
 }
 
 /// Read stdin until EOF and write everything to stdout (for `cat` with no args).

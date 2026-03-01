@@ -46,6 +46,8 @@ pub struct LoadedElf {
     pub aspace: KernelAddressSpace,
     pub entry_point: u64,
     pub stack_top: u64,
+    /// Initial program break: page-aligned end of the last PT_LOAD segment.
+    pub brk: u64,
 }
 
 // ---------------------------------------------------------------------------
@@ -78,13 +80,22 @@ pub fn load_elf(elf: &Elf64Info) -> Result<LoadedElf, ElfLoadError> {
     // The relocation offset: added to every p_vaddr in the ELF.
     let reloc_offset = user_base;
 
-    // Map each PT_LOAD segment.
+    // Map each PT_LOAD segment and track the highest segment end.
+    let mut seg_end = 0u64;
     for phdr in elf.load_segments() {
         map_segment(&mut aspace, elf, phdr, reloc_offset)?;
+        let end = phdr.p_vaddr + phdr.p_memsz;
+        if end > seg_end {
+            seg_end = end;
+        }
     }
 
     // Apply relocations for PIE binaries.
     apply_relocations(&aspace, elf, reloc_offset)?;
+
+    // Compute initial program break: page-aligned end of the last segment.
+    let page_mask = PAGE_SIZE as u64 - 1;
+    let initial_brk = (user_base + seg_end + page_mask) & !page_mask;
 
     // Map user stack.
     let stack_top = user_base + USER_STACK_OFFSET;
@@ -106,6 +117,7 @@ pub fn load_elf(elf: &Elf64Info) -> Result<LoadedElf, ElfLoadError> {
         aspace,
         entry_point,
         stack_top,
+        brk: initial_brk,
     })
 }
 

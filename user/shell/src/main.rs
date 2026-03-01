@@ -1,9 +1,12 @@
 #![no_std]
 #![no_main]
 
+extern crate alloc;
+
 mod builtins;
 mod dispatch;
 mod exec;
+mod heap;
 mod io;
 mod line;
 mod path;

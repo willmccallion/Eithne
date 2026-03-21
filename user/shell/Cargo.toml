@@ -9,5 +9,8 @@ readme = "../../README.md"
 keywords = ["kernel", "shell", "os"]
 categories = ["os", "no-std"]
 
+[dependencies]
+libsys = { path = "../libsys" }
+
 [lints]
 workspace = true

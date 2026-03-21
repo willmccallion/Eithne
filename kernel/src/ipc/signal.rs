@@ -21,6 +21,9 @@ pub const SIGCHLD: u8 = 17;
 /// Maximum number of signals supported (signals 1..31).
 pub const NSIG: usize = 32;
 
+/// Unix wait status: low 7 bits encode the signal number (0 for normal exit).
+pub const WAIT_STATUS_SIGNAL_MASK: i32 = 0x7F;
+
 // ---------------------------------------------------------------------------
 // Signal action
 // ---------------------------------------------------------------------------
@@ -320,7 +323,7 @@ pub fn deliver_pending_signal(frame: &mut crate::arch::x86_64::syscall::SyscallF
                     match default_action(sig) {
                         DefaultAction::Ignore => SignalDisposition::Ignored,
                         DefaultAction::Terminate => {
-                            let status = sig as i32 & 0x7F;
+                            let status = sig as i32 & WAIT_STATUS_SIGNAL_MASK;
 
                             // Drain fds (re-borrow current task).
                             let fds = guard

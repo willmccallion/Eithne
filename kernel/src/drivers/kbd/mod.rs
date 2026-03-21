@@ -61,6 +61,9 @@ const KEY_C: u8 = 0x2E;
 const LALT_MAKE: u8 = 0x38;
 const LALT_BREAK: u8 = 0xB8;
 
+/// Bit 7 is set in break codes (key release).
+const BREAK_BIT: u8 = 0x80;
+
 /// Process a raw PS/2 scan code (set 1).
 ///
 /// On a valid make code, translates to ASCII and pushes to the input buffer.
@@ -96,7 +99,7 @@ pub fn handle_scancode(scancode: u8) {
     }
 
     // Ignore break codes (bit 7 set).
-    if scancode & 0x80 != 0 {
+    if scancode & BREAK_BIT != 0 {
         return;
     }
 

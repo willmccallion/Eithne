@@ -26,6 +26,11 @@ const COLORS: [(u8, u8, u8); 16] = [
 const DEFAULT_FG: (u8, u8, u8) = (0xCC, 0xCC, 0xCC);
 const DEFAULT_BG: (u8, u8, u8) = (0x00, 0x00, 0x00);
 
+/// Escape character (starts ANSI escape sequences).
+const ESC: u8 = 0x1B;
+/// Backspace character.
+const BS: u8 = 0x08;
+
 #[derive(Clone, Copy)]
 enum EscState {
     Normal,
@@ -101,7 +106,7 @@ pub fn fb_write_str(s: &str) {
 fn put_char(con: &mut FbConsole, fb: &super::FrameBuffer, ch: u8) {
     match con.esc_state {
         EscState::Normal => match ch {
-            0x1b => {
+            ESC => {
                 con.esc_state = EscState::Esc;
             }
             b'\n' => {
@@ -111,7 +116,7 @@ fn put_char(con: &mut FbConsole, fb: &super::FrameBuffer, ch: u8) {
             b'\r' => {
                 con.col = 0;
             }
-            0x08 => {
+            BS => {
                 if con.col > 0 {
                     con.col -= 1;
                 }

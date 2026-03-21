@@ -1,0 +1,15 @@
+[package]
+name = "write"
+version = "0.1.0"
+edition = "2024"
+description = "eithne write utility"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/willmccallion/eithne"
+keywords = ["kernel", "os"]
+categories = ["os", "no-std"]
+
+[dependencies]
+libsys = { path = "../../libsys" }
+
+[lints]
+workspace = true

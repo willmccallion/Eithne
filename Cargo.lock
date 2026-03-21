@@ -15,6 +15,13 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "843867be96c8daad0d758b57df9392b6d8d271134fce549de6ce169ff98a92af"
 
 [[package]]
+name = "cat"
+version = "0.1.0"
+dependencies = [
+ "libsys",
+]
+
+[[package]]
 name = "cfg-if"
 version = "1.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -28,10 +35,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "libsys"
+version = "0.1.0"
+
+[[package]]
 name = "log"
 version = "0.4.29"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5e5032e24019045c762d3c0f28f5b6b8bbf38563a65908389bf7978758920897"
+
+[[package]]
+name = "ls"
+version = "0.1.0"
+dependencies = [
+ "libsys",
+]
+
+[[package]]
+name = "mkdir"
+version = "0.1.0"
+dependencies = [
+ "libsys",
+]
 
 [[package]]
 name = "proc-macro2"
@@ -72,8 +97,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "rm"
+version = "0.1.0"
+dependencies = [
+ "libsys",
+]
+
+[[package]]
 name = "shell"
 version = "0.1.0"
+dependencies = [
+ "libsys",
+]
+
+[[package]]
+name = "stat"
+version = "0.1.0"
+dependencies = [
+ "libsys",
+]
 
 [[package]]
 name = "syn"
@@ -143,3 +185,10 @@ name = "unicode-ident"
 version = "1.0.24"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e6e4313cd5fcd3dad5cafa179702e2b244f760991f45397d14d4ebf38247da75"
+
+[[package]]
+name = "write"
+version = "0.1.0"
+dependencies = [
+ "libsys",
+]

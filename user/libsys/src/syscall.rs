@@ -27,15 +27,27 @@ const SYS_CHDIR: usize = 80;
 const SYS_BRK: usize = 12;
 const SYS_READDIR: usize = 217;
 
-// Linux O_* flags.
+// ---------------------------------------------------------------------------
+// Linux O_* flags
+// ---------------------------------------------------------------------------
+
+/// Open file for reading only.
 pub const O_RDONLY: usize = 0;
+/// Open file for writing only.
 pub const O_WRONLY: usize = 1;
+/// Create the file if it does not exist.
 pub const O_CREAT: usize = 0x40;
+/// Truncate the file to zero length on open.
 pub const O_TRUNC: usize = 0x200;
+/// Append writes to the end of the file.
 pub const O_APPEND: usize = 0x400;
 
 /// Linux directory entry type for directories.
 pub const DT_DIR: u8 = 4;
+
+// ---------------------------------------------------------------------------
+// Inline syscall helpers
+// ---------------------------------------------------------------------------
 
 #[allow(clippy::inline_always)]
 #[inline(always)]
@@ -111,40 +123,53 @@ unsafe fn syscall3(num: usize, a1: usize, a2: usize, a3: usize) -> isize {
 // Public wrappers
 // ---------------------------------------------------------------------------
 
+/// Read from a file descriptor into `buf`. Returns bytes read or negative errno.
 pub fn sys_read(fd: usize, buf: &mut [u8]) -> isize {
     unsafe { syscall3(SYS_READ, fd, buf.as_mut_ptr() as usize, buf.len()) }
 }
 
+/// Write `buf` to a file descriptor. Returns bytes written or negative errno.
+#[must_use]
 pub fn sys_write(fd: usize, buf: &[u8]) -> isize {
     unsafe { syscall3(SYS_WRITE, fd, buf.as_ptr() as usize, buf.len()) }
 }
 
+/// Open a file by path. Returns file descriptor or negative errno.
+#[must_use]
 pub fn sys_open(path: &str, flags: usize) -> isize {
     with_cstr(path, |ptr| unsafe {
         syscall2(SYS_OPEN, ptr as usize, flags)
     })
 }
 
+/// Close a file descriptor.
+#[must_use]
 pub fn sys_close(fd: usize) -> isize {
     unsafe { syscall1(SYS_CLOSE, fd) }
 }
 
+/// Get file status. Returns 0 on success or negative errno.
 pub fn sys_stat(path: &str, statbuf: &mut StatBuf) -> isize {
     with_cstr(path, |ptr| unsafe {
         syscall2(SYS_STAT, ptr as usize, statbuf as *mut StatBuf as usize)
     })
 }
 
+/// Create a directory. Returns 0 on success or negative errno.
+#[must_use]
 pub fn sys_mkdir(path: &str) -> isize {
     with_cstr(path, |ptr| unsafe {
         syscall2(SYS_MKDIR, ptr as usize, 0o755)
     })
 }
 
+/// Remove a file. Returns 0 on success or negative errno.
+#[must_use]
 pub fn sys_unlink(path: &str) -> isize {
     with_cstr(path, |ptr| unsafe { syscall1(SYS_UNLINK, ptr as usize) })
 }
 
+/// Read directory entries. Returns bytes of entries or negative errno.
 pub fn sys_readdir(path: &str, buf: &mut [u8]) -> isize {
     with_cstr(path, |ptr| unsafe {
         syscall3(
@@ -156,6 +181,7 @@ pub fn sys_readdir(path: &str, buf: &mut [u8]) -> isize {
     })
 }
 
+/// Terminate the current process with the given exit code.
 pub fn sys_exit(code: usize) -> ! {
     unsafe {
         let _ = syscall1(SYS_EXIT, code);
@@ -164,6 +190,8 @@ pub fn sys_exit(code: usize) -> ! {
     loop {}
 }
 
+/// Fork the current process. Returns 0 in child, child PID in parent, or negative errno.
+#[must_use]
 pub fn sys_fork() -> isize {
     unsafe { syscall0(SYS_FORK) }
 }
@@ -172,6 +200,7 @@ pub fn sys_fork() -> isize {
 ///
 /// `argv` must be a NULL-terminated array of pointers to NUL-terminated strings.
 /// Pass `core::ptr::null()` for no arguments.
+#[must_use]
 pub fn sys_exec(path: &str, argv: *const *const u8) -> isize {
     with_cstr(path, |ptr| unsafe {
         syscall2(SYS_EXECVE, ptr as usize, argv as usize)
@@ -185,27 +214,31 @@ pub fn sys_waitpid(pid: usize, status: &mut i32) -> isize {
     unsafe { syscall2(SYS_WAIT4, pid, status as *mut i32 as usize) }
 }
 
-/// Create a pipe. Writes [read_fd, write_fd] into `fds`.
+/// Create a pipe. Writes `[read_fd, write_fd]` into `fds`.
 pub fn sys_pipe(fds: &mut [i32; 2]) -> isize {
     unsafe { syscall1(SYS_PIPE, fds.as_mut_ptr() as usize) }
 }
 
 /// Duplicate `old_fd` to `new_fd`, closing `new_fd` first if open.
+#[must_use]
 pub fn sys_dup2(old_fd: usize, new_fd: usize) -> isize {
     unsafe { syscall2(SYS_DUP2, old_fd, new_fd) }
 }
 
 /// Send a signal to a process.
+#[must_use]
 pub fn sys_kill(pid: usize, sig: usize) -> isize {
     unsafe { syscall2(SYS_KILL, pid, sig) }
 }
 
 /// Register a signal handler.
+#[must_use]
 pub fn sys_sigaction(sig: usize, new_act: usize, old_act: usize) -> isize {
     unsafe { syscall3(SYS_SIGACTION, sig, new_act, old_act) }
 }
 
 /// Change the current working directory.
+#[must_use]
 pub fn sys_chdir(path: &str) -> isize {
     with_cstr(path, |ptr| unsafe { syscall1(SYS_CHDIR, ptr as usize) })
 }
@@ -219,6 +252,7 @@ pub fn sys_chdir(path: &str) -> isize {
 /// Returns a pointer to the start of the newly allocated region on success,
 /// or a null pointer on failure.  If `increment` is 0, returns the current
 /// break without changing it.
+#[must_use]
 pub fn sys_sbrk(increment: isize) -> *mut u8 {
     let current = unsafe { syscall1(SYS_BRK, 0) };
     if current < 0 {
@@ -241,90 +275,153 @@ pub fn sys_sbrk(increment: isize) -> *mut u8 {
     }
 }
 
-// Signal constants.
+// ---------------------------------------------------------------------------
+// Signal constants
+// ---------------------------------------------------------------------------
+
+/// Interrupt signal (Ctrl+C).
 pub const SIGINT: usize = 2;
+/// Broken pipe signal.
 pub const SIGPIPE: usize = 13;
+/// Termination signal.
 pub const SIGTERM: usize = 15;
 
-/// User-space sigaction struct (must match kernel's SigActionUser layout).
+/// User-space sigaction struct (must match kernel's `SigActionUser` layout).
 #[repr(C)]
+#[derive(Debug)]
 pub struct SigActionUser {
+    /// Signal handler address (or `SIG_DFL`/`SIG_IGN`).
     pub handler: u64,
+    /// Signal action flags.
     pub flags: u64,
+    /// Signal mask during handler execution.
     pub mask: u32,
-    pub _pad: u32,
+    /// Padding for alignment.
+    pub pad: u32,
 }
 
-/// SIG_DFL sentinel.
+/// Default signal disposition sentinel.
 pub const SIG_DFL: u64 = 0;
-/// SIG_IGN sentinel.
+/// Ignore signal sentinel.
 pub const SIG_IGN: u64 = 1;
+
+// ---------------------------------------------------------------------------
+// Unix file type constants (S_IF* from <sys/stat.h>)
+// ---------------------------------------------------------------------------
+
+/// File type mask.
+pub const S_IFMT: u32 = 0o170000;
+/// FIFO (named pipe).
+pub const S_IFIFO: u32 = 0o010000;
+/// Character device.
+pub const S_IFCHR: u32 = 0o020000;
+/// Directory.
+pub const S_IFDIR: u32 = 0o040000;
+/// Block device.
+pub const S_IFBLK: u32 = 0o060000;
+/// Regular file.
+pub const S_IFREG: u32 = 0o100000;
+/// Symbolic link.
+pub const S_IFLNK: u32 = 0o120000;
+/// Socket.
+pub const S_IFSOCK: u32 = 0o140000;
 
 // ---------------------------------------------------------------------------
 // Types matching kernel structs
 // ---------------------------------------------------------------------------
 
-/// Matches the kernel's `UserStat` layout in dispatch.rs.
+/// File status buffer (matches the kernel's `UserStat` layout).
 #[repr(C)]
+#[derive(Debug)]
 pub struct StatBuf {
+    /// Inode number.
     pub st_ino: u64,
+    /// File mode (type + permissions).
     pub st_mode: u32,
-    pub _pad0: u32,
+    pad0: u32,
+    /// File size in bytes.
     pub st_size: u64,
-    pub _pad1: [u8; 128],
+    pad1: [u8; 128],
 }
 
 #[allow(dead_code)]
 impl StatBuf {
+    /// Create a zeroed `StatBuf`.
+    #[must_use]
     pub const fn zeroed() -> Self {
         Self {
             st_ino: 0,
             st_mode: 0,
-            _pad0: 0,
+            pad0: 0,
             st_size: 0,
-            _pad1: [0u8; 128],
+            pad1: [0u8; 128],
         }
     }
 
+    /// Returns true if this is a directory.
+    #[must_use]
     pub const fn is_dir(&self) -> bool {
-        (self.st_mode & 0o170000) == 0o040000
+        (self.st_mode & S_IFMT) == S_IFDIR
     }
 
+    /// Returns true if this is a regular file.
+    #[must_use]
     pub const fn is_file(&self) -> bool {
-        (self.st_mode & 0o170000) == 0o100000
+        (self.st_mode & S_IFMT) == S_IFREG
     }
 
+    /// Returns a human-readable file type string.
+    #[must_use]
     pub const fn type_str(&self) -> &'static str {
-        let fmt = self.st_mode & 0o170000;
+        let fmt = self.st_mode & S_IFMT;
         match fmt {
-            0o100000 => "file",
-            0o040000 => "dir",
-            0o120000 => "link",
-            0o020000 => "cdev",
-            0o060000 => "bdev",
-            0o010000 => "fifo",
-            0o140000 => "sock",
+            S_IFREG => "file",
+            S_IFDIR => "dir",
+            S_IFLNK => "link",
+            S_IFCHR => "cdev",
+            S_IFBLK => "bdev",
+            S_IFIFO => "fifo",
+            S_IFSOCK => "sock",
             _ => "???",
         }
     }
 }
 
-/// Matches the kernel's `UserDirEntry` layout in dispatch.rs.
+/// Directory entry (matches the kernel's `UserDirEntry` layout).
 #[repr(C)]
 pub struct DirEntry {
+    /// Inode number.
     pub d_ino: u64,
+    /// Entry type (e.g. `DT_DIR`).
     pub d_type: u8,
+    /// Length of the name in bytes.
     pub d_name_len: u8,
-    pub _pad: [u8; 6],
+    pad: [u8; 6],
+    /// File name bytes (not NUL-terminated).
     pub d_name: [u8; 256],
+}
+
+// Manual Debug impl because [u8; 256] doesn't implement Debug.
+impl core::fmt::Debug for DirEntry {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("DirEntry")
+            .field("d_ino", &self.d_ino)
+            .field("d_type", &self.d_type)
+            .field("d_name", &&self.d_name[..self.d_name_len as usize])
+            .finish_non_exhaustive()
+    }
 }
 
 #[allow(dead_code)]
 impl DirEntry {
+    /// Returns the entry name as a byte slice.
+    #[must_use]
     pub fn name(&self) -> &[u8] {
         &self.d_name[..self.d_name_len as usize]
     }
 
+    /// Returns "/" for directories, "" for other types.
+    #[must_use]
     pub const fn type_indicator(&self) -> &'static str {
         match self.d_type {
             DT_DIR => "/",
@@ -334,11 +431,18 @@ impl DirEntry {
 }
 
 // ---------------------------------------------------------------------------
-// Helpers
+// Errno constants
 // ---------------------------------------------------------------------------
 
-/// Negative errno returned when a path is too long.
+/// Negative `EINTR` — syscall interrupted by signal.
+pub const NEG_EINTR: isize = -4;
+
+/// Negative `EINVAL` — invalid argument (e.g. path too long).
 const NEG_EINVAL: isize = -22;
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
 
 /// Copy a Rust `&str` to a NUL-terminated buffer on the stack, then call `f`.
 fn with_cstr(s: &str, f: impl FnOnce(*const u8) -> isize) -> isize {

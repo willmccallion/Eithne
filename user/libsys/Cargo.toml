@@ -1,0 +1,13 @@
+[package]
+name = "libsys"
+version = "0.1.0"
+edition = "2024"
+description = "eithne user-space system library"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/willmccallion/eithne"
+readme = "../../README.md"
+keywords = ["kernel", "syscall", "os"]
+categories = ["os", "no-std"]
+
+[lints]
+workspace = true

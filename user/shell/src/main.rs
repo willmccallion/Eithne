@@ -6,28 +6,14 @@
 mod builtins;
 mod dispatch;
 mod exec;
-mod heap;
-mod io;
 mod line;
-mod path;
 mod pipeline;
 mod redirect;
-mod syscall;
 
 use dispatch::{dispatch_command, print_prompt};
-use io::{print, CLR_CYAN, CLR_RESET, LINE_MAX};
+use libsys::io::{print, CLR_CYAN, CLR_RESET, LINE_MAX};
+use libsys::syscall::{SigActionUser, SIG_IGN, SIGINT, SIGPIPE, sys_sigaction};
 use line::read_line;
-use syscall::{SigActionUser, SIG_IGN, sys_sigaction, SIGINT, SIGPIPE, sys_exit};
-
-// ---------------------------------------------------------------------------
-// Entry point
-// ---------------------------------------------------------------------------
-
-#[unsafe(no_mangle)]
-#[unsafe(naked)]
-extern "C" fn _start() -> ! {
-    core::arch::naked_asm!("call main", "ud2")
-}
 
 #[unsafe(no_mangle)]
 extern "C" fn main(_argc: usize, _argv: *const *const u8) -> ! {
@@ -36,7 +22,7 @@ extern "C" fn main(_argc: usize, _argv: *const *const u8) -> ! {
         handler: SIG_IGN,
         flags: 0,
         mask: 0,
-        _pad: 0,
+        pad: 0,
     };
     let _ = sys_sigaction(SIGINT, &ign_act as *const SigActionUser as usize, 0);
     // Also ignore SIGPIPE for the shell itself.
@@ -61,10 +47,4 @@ extern "C" fn main(_argc: usize, _argv: *const *const u8) -> ! {
         let input = &line[..len];
         dispatch_command(input, &mut cwd, &mut cwd_len);
     }
-}
-
-#[panic_handler]
-fn panic(_info: &core::panic::PanicInfo<'_>) -> ! {
-    print("panic!\n");
-    sys_exit(1);
 }

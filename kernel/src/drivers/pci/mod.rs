@@ -13,6 +13,26 @@ const CONFIG_ADDRESS: u16 = 0x0CF8;
 /// I/O port for PCI configuration data register.
 const CONFIG_DATA: u16 = 0x0CFC;
 
+// PCI configuration space register offsets.
+/// Vendor ID register (16-bit).
+const PCI_VENDOR_ID: u8 = 0x00;
+/// Device ID register (16-bit, at offset 2).
+const PCI_DEVICE_ID: u8 = 0x02;
+/// Revision / class / subclass / prog-if (32-bit).
+const PCI_CLASS_REVISION: u8 = 0x08;
+/// Header type register.
+const PCI_HEADER_TYPE: u8 = 0x0E;
+/// First BAR register.
+const PCI_BAR0: u8 = 0x10;
+/// Interrupt line register.
+const PCI_INTERRUPT_LINE: u8 = 0x3C;
+/// Multi-function bit in header type register.
+const PCI_HEADER_MULTIFUNCTION: u8 = 0x80;
+/// Mask to extract header type (bits 6:0).
+const PCI_HEADER_TYPE_MASK: u8 = 0x7F;
+/// Invalid vendor ID (device not present).
+const PCI_VENDOR_NONE: u16 = 0xFFFF;
+
 /// Location of a device on the PCI bus.
 #[derive(Debug, Clone, Copy)]
 pub struct PciAddress {
@@ -191,31 +211,31 @@ fn enumerate() -> Vec<PciDevice> {
 
     for bus in 0u16..=255 {
         for device in 0u8..32 {
-            let vendor = config_read16(bus as u8, device, 0, 0);
-            if vendor == 0xFFFF {
+            let vendor = config_read16(bus as u8, device, 0, PCI_VENDOR_ID);
+            if vendor == PCI_VENDOR_NONE {
                 continue;
             }
-            let header_type = config_read8(bus as u8, device, 0, 0x0E);
-            let max_func = if header_type & 0x80 != 0 { 8 } else { 1 };
+            let header_type = config_read8(bus as u8, device, 0, PCI_HEADER_TYPE);
+            let max_func = if header_type & PCI_HEADER_MULTIFUNCTION != 0 { 8 } else { 1 };
 
             for function in 0..max_func {
-                let vendor = config_read16(bus as u8, device, function, 0);
-                if vendor == 0xFFFF {
+                let vendor = config_read16(bus as u8, device, function, PCI_VENDOR_ID);
+                if vendor == PCI_VENDOR_NONE {
                     continue;
                 }
-                let device_id = config_read16(bus as u8, device, function, 2);
-                let class_sub = config_read32(bus as u8, device, function, 0x08);
+                let device_id = config_read16(bus as u8, device, function, PCI_DEVICE_ID);
+                let class_sub = config_read32(bus as u8, device, function, PCI_CLASS_REVISION);
                 let class_code = (class_sub >> 24) as u8;
                 let subclass = (class_sub >> 16) as u8;
                 let prog_if = (class_sub >> 8) as u8;
-                let ht = config_read8(bus as u8, device, function, 0x0E) & 0x7F;
-                let interrupt_line = config_read8(bus as u8, device, function, 0x3C);
+                let ht = config_read8(bus as u8, device, function, PCI_HEADER_TYPE) & PCI_HEADER_TYPE_MASK;
+                let interrupt_line = config_read8(bus as u8, device, function, PCI_INTERRUPT_LINE);
 
                 let mut bars = [0u32; 6];
                 if ht == 0 {
                     let mut i = 0;
                     while i < 6 {
-                        let offset = 0x10 + (i as u8) * 4;
+                        let offset = PCI_BAR0 + (i as u8) * 4;
                         bars[i] = config_read32(bus as u8, device, function, offset);
                         // Skip the high half of 64-bit BARs.
                         if bars[i] & 1 == 0 && (bars[i] >> 1) & 3 == 2 {
@@ -225,7 +245,7 @@ fn enumerate() -> Vec<PciDevice> {
                                     bus as u8,
                                     device,
                                     function,
-                                    0x10 + (i as u8) * 4,
+                                    PCI_BAR0 + (i as u8) * 4,
                                 );
                             }
                         }

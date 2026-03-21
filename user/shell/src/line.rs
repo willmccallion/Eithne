@@ -1,10 +1,27 @@
+//! Line editing and tab completion.
+
 use crate::dispatch::print_prompt;
-use crate::io::{LINE_MAX, STDIN, print, print_bytes, COMMANDS};
-use crate::syscall::sys_read;
+use libsys::io::{print, print_bytes, COMMANDS, LINE_MAX, STDIN};
+use libsys::syscall::{sys_read, NEG_EINTR};
 
-/// Negative errno returned by sys_read when interrupted by a signal.
-const NEG_EINTR: isize = -4;
+// ---- Terminal control characters ----
 
+/// Backspace (BS).
+const BS: u8 = 0x08;
+/// Delete (DEL).
+const DEL: u8 = 0x7F;
+/// Escape (starts ANSI escape sequences).
+const ESC: u8 = 0x1B;
+/// First printable ASCII character (space).
+const PRINTABLE_START: u8 = 0x20;
+/// Last printable ASCII character (tilde).
+const PRINTABLE_END: u8 = 0x7E;
+/// Start of CSI final byte range.
+const CSI_FINAL_START: u8 = 0x40;
+/// End of CSI final byte range.
+const CSI_FINAL_END: u8 = 0x7E;
+
+/// Read a line of input from stdin with basic editing support.
 pub fn read_line(buf: &mut [u8; LINE_MAX], cwd: &[u8]) -> usize {
     let mut len: usize = 0;
     let mut ch = [0u8; 1];
@@ -12,7 +29,6 @@ pub fn read_line(buf: &mut [u8; LINE_MAX], cwd: &[u8]) -> usize {
     loop {
         let n = sys_read(STDIN, &mut ch);
         if n == NEG_EINTR {
-            // Ctrl+C: discard current input, print ^C, re-show prompt.
             print("^C\n");
             print_prompt(cwd);
             len = 0;
@@ -24,53 +40,43 @@ pub fn read_line(buf: &mut [u8; LINE_MAX], cwd: &[u8]) -> usize {
 
         let c = ch[0];
         match c {
-            // Enter (CR or LF)
             b'\r' | b'\n' => {
                 print("\n");
                 return len;
             }
-            // Backspace (BS or DEL)
-            0x08 | 0x7F if len > 0 => {
+            BS | DEL if len > 0 => {
                 len -= 1;
-                print_bytes(&[0x08, b' ', 0x08]);
+                print_bytes(&[BS, b' ', BS]);
             }
-            // Tab — autocomplete command name
             b'\t' => {
                 try_complete(buf, &mut len, cwd);
             }
-            // Escape: consume the full ANSI sequence so it doesn't leak
-            // into the line buffer (e.g. arrow keys send \x1b[A).
-            0x1b => {
+            ESC => {
                 let mut seq = [0u8; 1];
                 let n2 = sys_read(STDIN, &mut seq);
                 if n2 > 0 && seq[0] == b'[' {
-                    // CSI sequence — read until a letter (0x40..0x7E).
                     loop {
                         let n3 = sys_read(STDIN, &mut seq);
-                        if n3 <= 0 || (seq[0] >= 0x40 && seq[0] <= 0x7E) {
+                        if n3 <= 0 || (seq[0] >= CSI_FINAL_START && seq[0] <= CSI_FINAL_END) {
                             break;
                         }
                     }
                 }
             }
-            // Normal printable character (0x20..=0x7E)
-            0x20..=0x7E if len < LINE_MAX => {
+            PRINTABLE_START..=PRINTABLE_END if len < LINE_MAX => {
                 buf[len] = c;
                 len += 1;
                 print_bytes(&[c]);
             }
-            // Ignore all other non-printable bytes.
             _ => {}
         }
     }
 }
 
-/// Tab-complete command names. Only acts when the cursor is still in the
-/// first word (no space typed yet).
+/// Tab-complete command names.
 fn try_complete(buf: &mut [u8; LINE_MAX], len: &mut usize, cwd: &[u8]) {
     let prefix = &buf[..*len];
 
-    // Only complete the command word (before any space).
     let mut has_space = false;
     let mut i = 0;
     while i < prefix.len() {
@@ -84,7 +90,6 @@ fn try_complete(buf: &mut [u8; LINE_MAX], len: &mut usize, cwd: &[u8]) {
         return;
     }
 
-    // Gather matches.
     let mut matches = [0u8; 16];
     let mut count: usize = 0;
     for (idx, cmd) in COMMANDS.iter().enumerate() {
@@ -99,7 +104,6 @@ fn try_complete(buf: &mut [u8; LINE_MAX], len: &mut usize, cwd: &[u8]) {
     }
 
     if count == 1 {
-        // Single match — complete and append a space.
         let cmd = COMMANDS[matches[0] as usize];
         for &b in &cmd[*len..] {
             if *len < LINE_MAX {
@@ -114,7 +118,6 @@ fn try_complete(buf: &mut [u8; LINE_MAX], len: &mut usize, cwd: &[u8]) {
             print_bytes(b" ");
         }
     } else {
-        // Multiple matches — print them, then reprint prompt + input.
         print("\n");
         for i in 0..count {
             print_bytes(COMMANDS[matches[i] as usize]);

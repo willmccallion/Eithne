@@ -1,6 +1,6 @@
-use crate::io::{LINE_MAX, print_error, STDIN, STDOUT};
-use crate::path::{resolve_path, bytes_to_str};
-use crate::syscall::{sys_open, O_RDONLY, sys_dup2, sys_close, O_WRONLY, O_CREAT, O_APPEND, O_TRUNC};
+use libsys::io::{print_error, LINE_MAX, STDIN, STDOUT};
+use libsys::path::{bytes_to_str, resolve_path};
+use libsys::syscall::{sys_close, sys_dup2, sys_open, O_APPEND, O_CREAT, O_RDONLY, O_TRUNC, O_WRONLY};
 
 /// Parsed redirection targets for a single command.
 pub struct Redirects {

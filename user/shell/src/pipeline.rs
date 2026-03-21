@@ -1,34 +1,34 @@
+//! Pipeline execution (commands connected by `|`).
+
 use core::cmp::Ordering;
 
-use crate::builtins::{cmd_echo, cat_stdin, cmd_cat, cmd_ls, cmd_pwd, cmd_stat, cmd_help};
-use crate::exec::{EXEC_FAILURE_EXIT_CODE, build_argv};
-use crate::io::{LINE_MAX, print_error, STDIN, STDOUT};
-use crate::path::{trim, split_first, resolve_path, bytes_to_str};
-use crate::redirect::{parse_redirects, has_redirects, apply_redirects};
-use crate::syscall::{sys_pipe, sys_close, sys_fork, SigActionUser, SIG_DFL, sys_sigaction, SIGINT, sys_dup2, sys_exit, sys_waitpid, sys_exec};
+use crate::builtins::cmd_echo;
+use crate::exec::{build_argv, EXEC_FAILURE_EXIT_CODE};
+use libsys::io::{print_error, LINE_MAX, STDIN, STDOUT};
+use libsys::path::{bytes_to_str, resolve_path, split_first, trim};
+use libsys::syscall::{
+    sys_close, sys_dup2, sys_exec, sys_exit, sys_fork, sys_pipe, sys_read, sys_sigaction,
+    sys_waitpid, sys_write, SigActionUser, NEG_EINTR, SIG_DFL, SIGINT,
+};
 
 /// Maximum number of pipeline stages.
 const MAX_PIPELINE_STAGES: usize = 8;
 
 /// Execute a pipeline of commands connected by pipes.
 pub fn cmd_pipeline(input: &[u8], cwd: &[u8]) {
-    // Split input by '|' into stages.
     let mut stages = [[0u8; LINE_MAX]; MAX_PIPELINE_STAGES];
     let mut stage_lens = [0usize; MAX_PIPELINE_STAGES];
     let n = split_pipeline(input, &mut stages, &mut stage_lens);
 
     if n < 2 {
-        // Shouldn't happen (caller checked for '|'), but handle gracefully.
         return;
     }
 
-    // Create n-1 pipes.
     let mut pipes = [[0i32; 2]; MAX_PIPELINE_STAGES - 1];
     for i in 0..n - 1 {
         let ret = sys_pipe(&mut pipes[i]);
         if ret < 0 {
             print_error("pipe", ret);
-            // Clean up any already-created pipes.
             for pipe in &pipes[..i] {
                 let _ = sys_close(pipe[0] as usize);
                 let _ = sys_close(pipe[1] as usize);
@@ -37,7 +37,6 @@ pub fn cmd_pipeline(input: &[u8], cwd: &[u8]) {
         }
     }
 
-    // Fork n children.
     let mut pids = [0isize; MAX_PIPELINE_STAGES];
     let mut fork_ok = true;
 
@@ -45,37 +44,28 @@ pub fn cmd_pipeline(input: &[u8], cwd: &[u8]) {
         let pid = sys_fork();
         match pid.cmp(&0) {
             Ordering::Equal => {
-                // ---- Child process for stage i ----
-
-                // Reset SIGINT to default (shell had SIG_IGN).
                 let dfl_act = SigActionUser {
                     handler: SIG_DFL,
                     flags: 0,
                     mask: 0,
-                    _pad: 0,
+                    pad: 0,
                 };
                 let _ = sys_sigaction(SIGINT, &dfl_act as *const SigActionUser as usize, 0);
 
-                // Wire up stdin from previous pipe's read end (except first stage).
                 if i > 0 {
                     let _ = sys_dup2(pipes[i - 1][0] as usize, STDIN);
                 }
-
-                // Wire up stdout to current pipe's write end (except last stage).
                 if i < n - 1 {
                     let _ = sys_dup2(pipes[i][1] as usize, STDOUT);
                 }
 
-                // Close all pipe fds in the child (they've been dup2'd as needed).
                 for pipe in &pipes[..n - 1] {
                     let _ = sys_close(pipe[0] as usize);
                     let _ = sys_close(pipe[1] as usize);
                 }
 
-                // Dispatch this stage's command.
                 let stage = &stages[i][..stage_lens[i]];
                 run_pipeline_stage(stage, cwd);
-                // Should not return.
                 sys_exit(0);
             }
             Ordering::Greater => {
@@ -89,21 +79,19 @@ pub fn cmd_pipeline(input: &[u8], cwd: &[u8]) {
         }
     }
 
-    // Parent: close all pipe fds.
     for pipe in &pipes[..n - 1] {
         let _ = sys_close(pipe[0] as usize);
         let _ = sys_close(pipe[1] as usize);
     }
 
-    // Wait for all children, retrying on EINTR.
     if fork_ok {
         for &pid in &pids[..n] {
             if pid > 0 {
                 let mut status: i32 = 0;
                 loop {
                     let ret = sys_waitpid(pid as usize, &mut status);
-                    if ret == -4_isize {
-                        continue; // EINTR
+                    if ret == NEG_EINTR {
+                        continue;
                     }
                     break;
                 }
@@ -112,7 +100,7 @@ pub fn cmd_pipeline(input: &[u8], cwd: &[u8]) {
     }
 }
 
-/// Split `input` by `|`, trimming whitespace around each stage.
+/// Split input by `|`, trimming whitespace around each stage.
 fn split_pipeline(
     input: &[u8],
     stages: &mut [[u8; LINE_MAX]; MAX_PIPELINE_STAGES],
@@ -141,14 +129,10 @@ fn split_pipeline(
     count
 }
 
-/// Run a single pipeline stage in a child process. The child's stdin/stdout
-/// have already been redirected via dup2.
-///
-/// For built-in commands (echo, cat, ls, etc.) we run them directly — they
-/// use sys_write(STDOUT, ...) / sys_read(STDIN, ...) which now go through
-/// the pipe. For `run <path>`, we exec the external program.
+/// Run a single pipeline stage in a child process.
 pub fn run_pipeline_stage(stage: &[u8], cwd: &[u8]) {
-    // Parse and apply any per-stage redirections (e.g., `cat < file`).
+    use crate::redirect::{apply_redirects, has_redirects, parse_redirects};
+
     let mut clean_buf = [0u8; LINE_MAX];
     let (clean_len, redir) = parse_redirects(stage, &mut clean_buf);
     let clean = &clean_buf[..clean_len];
@@ -166,46 +150,47 @@ pub fn run_pipeline_stage(stage: &[u8], cwd: &[u8]) {
         b"cat" => {
             if args.is_empty() {
                 // cat with no args: copy stdin to stdout
-                cat_stdin();
+                let mut buf = [0u8; 512];
+                loop {
+                    let n = sys_read(STDIN, &mut buf);
+                    if n <= 0 {
+                        break;
+                    }
+                    let _ = sys_write(STDOUT, &buf[..n as usize]);
+                }
             } else {
-                cmd_cat(args, cwd);
+                // Try external /bin/cat
+                exec_external(cmd, args, cwd);
             }
-        }
-        b"ls" => {
-            cmd_ls(args, cwd);
-        }
-        b"pwd" => {
-            cmd_pwd(cwd);
-        }
-        b"stat" => {
-            cmd_stat(args, cwd);
-        }
-        b"help" => {
-            cmd_help();
-        }
-        b"run" => {
-            // External program — exec replaces this child.
-            if args.is_empty() {
-                print_error("run", -22);
-                sys_exit(EXEC_FAILURE_EXIT_CODE);
-            }
-            let (path_arg, rest) = split_first(args);
-            let (resolved, rlen) = resolve_path(cwd, path_arg);
-            let path = bytes_to_str(&resolved[..rlen]);
-            let argv_ptr = build_argv(path.as_bytes(), rest);
-            let ret = sys_exec(path, argv_ptr);
-            print_error("exec", ret);
-            sys_exit(EXEC_FAILURE_EXIT_CODE);
         }
         _ => {
-            // Try as an external program path.
-            let (resolved, rlen) = resolve_path(cwd, cmd);
-            let path = bytes_to_str(&resolved[..rlen]);
-            let argv_ptr = build_argv(path.as_bytes(), args);
-            let ret = sys_exec(path, argv_ptr);
-            // If exec failed, print error and exit.
-            print_error("exec", ret);
-            sys_exit(EXEC_FAILURE_EXIT_CODE);
+            // Try as external program.
+            exec_external(cmd, args, cwd);
         }
     }
+}
+
+/// Attempt to exec an external program.
+fn exec_external(cmd: &[u8], args: &[u8], cwd: &[u8]) {
+    use libsys::path::contains_byte;
+
+    let (resolved, rlen) = if contains_byte(cmd, b'/') {
+        resolve_path(cwd, cmd)
+    } else {
+        let mut path_buf = [0u8; 270];
+        let prefix = b"/bin/";
+        let plen = prefix.len();
+        path_buf[..plen].copy_from_slice(prefix);
+        let clen = cmd.len().min(265);
+        path_buf[plen..plen + clen].copy_from_slice(&cmd[..clen]);
+        let mut result = [0u8; 256];
+        let total = (plen + clen).min(256);
+        result[..total].copy_from_slice(&path_buf[..total]);
+        (result, total)
+    };
+    let path = bytes_to_str(&resolved[..rlen]);
+    let argv_ptr = build_argv(path.as_bytes(), args);
+    let ret = sys_exec(path, argv_ptr);
+    print_error("exec", ret);
+    sys_exit(EXEC_FAILURE_EXIT_CODE);
 }

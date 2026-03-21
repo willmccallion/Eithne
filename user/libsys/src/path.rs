@@ -1,4 +1,7 @@
+//! Path resolution and byte-string utilities.
+
 /// Resolve `arg` relative to `cwd`, returning an absolute normalized path.
+#[must_use]
 pub fn resolve_path(cwd: &[u8], arg: &[u8]) -> ([u8; 256], usize) {
     let mut tmp = [0u8; 512];
     let tmp_len = if !arg.is_empty() && arg[0] == b'/' {
@@ -77,6 +80,8 @@ pub fn resolve_path(cwd: &[u8], arg: &[u8]) -> ([u8; 256], usize) {
     (result, rlen)
 }
 
+/// Check whether a byte slice contains a specific byte.
+#[must_use]
 pub const fn contains_byte(hay: &[u8], needle: u8) -> bool {
     let mut i = 0;
     while i < hay.len() {
@@ -89,6 +94,7 @@ pub const fn contains_byte(hay: &[u8], needle: u8) -> bool {
 }
 
 /// Split `input` into `(first_word, rest)`. `rest` may be empty.
+#[must_use]
 pub fn split_first(input: &[u8]) -> (&[u8], &[u8]) {
     let mut i = 0;
     while i < input.len() && input[i] != b' ' {
@@ -103,12 +109,14 @@ pub fn split_first(input: &[u8]) -> (&[u8], &[u8]) {
     (cmd, args)
 }
 
-/// Convert a byte slice to a &str (unchecked, input is ASCII from our line reader).
+/// Convert a byte slice to a `&str` (unchecked, input is ASCII from our line reader).
+#[must_use]
 pub const fn bytes_to_str(b: &[u8]) -> &str {
     unsafe { core::str::from_utf8_unchecked(b) }
 }
 
 /// Trim leading and trailing whitespace from a byte slice.
+#[must_use]
 pub fn trim(b: &[u8]) -> &[u8] {
     let mut start = 0;
     while start < b.len() && b[start] == b' ' {
@@ -122,6 +130,7 @@ pub fn trim(b: &[u8]) -> &[u8] {
 }
 
 /// Parse a decimal number from a byte slice.
+#[must_use]
 pub fn parse_usize(b: &[u8]) -> usize {
     let mut n: usize = 0;
     for &c in b {

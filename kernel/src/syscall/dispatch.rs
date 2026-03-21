@@ -1,9 +1,14 @@
-extern crate alloc;
+use alloc;
 use alloc::string::String;
+use alloc::vec::Vec;
 
 use core::sync::atomic::Ordering;
 
-use super::table::{SYS_READ, SYS_WRITE, SYS_OPEN, SYS_CLOSE, SYS_STAT, SYS_BRK, SYS_PIPE, SYS_DUP2, SYS_FORK, SYS_EXECVE, SYS_EXIT, SYS_WAIT4, SYS_MKDIR, SYS_UNLINK, SYS_GETPID, SYS_GETPPID, SYS_GETCWD, SYS_CHDIR, SYS_READDIR, SYS_KILL, SYS_SIGACTION, SYS_SIGPROCMASK};
+use super::table::{
+    SYS_BRK, SYS_CHDIR, SYS_CLOSE, SYS_DUP2, SYS_EXECVE, SYS_EXIT, SYS_FORK, SYS_GETCWD,
+    SYS_GETPID, SYS_GETPPID, SYS_KILL, SYS_MKDIR, SYS_OPEN, SYS_PIPE, SYS_READ, SYS_READDIR,
+    SYS_SIGACTION, SYS_SIGPROCMASK, SYS_STAT, SYS_UNLINK, SYS_WAIT4, SYS_WRITE,
+};
 use super::traits::{SyscallError, SyscallResult};
 use crate::fs::traits::{DirEntry, FileType, OpenFlags};
 use crate::mm::traits::PageMapper;
@@ -80,6 +85,37 @@ pub fn copy_path_from_user(ptr: usize) -> Result<String, SyscallError> {
     }
 
     Ok(path)
+}
+
+/// Copy a path from user space and resolve it to an absolute path.
+///
+/// If the path is relative (doesn't start with '/'), it is resolved against
+/// the current task's working directory. Handles "." and ".." components.
+fn copy_and_resolve_path(ptr: usize) -> Result<String, SyscallError> {
+    let raw = copy_path_from_user(ptr)?;
+    if raw.starts_with('/') {
+        return Ok(raw);
+    }
+    // Resolve relative path against CWD.
+    let cwd = crate::sched::with_current_task(|task| {
+        task.cwd.clone().ok_or(SyscallError::InvalidArgument)
+    })?;
+    let mut parts: Vec<&str> = cwd.split('/').filter(|s| !s.is_empty()).collect();
+    for component in raw.split('/') {
+        match component {
+            "" | "." => {}
+            ".." => { let _ = parts.pop(); }
+            c => parts.push(c),
+        }
+    }
+    let mut resolved = String::from("/");
+    for (i, part) in parts.iter().enumerate() {
+        if i > 0 {
+            resolved.push('/');
+        }
+        resolved.push_str(part);
+    }
+    Ok(resolved)
 }
 
 /// Convert Linux O_* flags integer to our OpenFlags.
@@ -227,7 +263,7 @@ fn sys_write(args: &[usize; 6]) -> SyscallResult {
 // ---------------------------------------------------------------------------
 
 fn sys_open(args: &[usize; 6]) -> SyscallResult {
-    let path = copy_path_from_user(args[0])?;
+    let path = copy_and_resolve_path(args[0])?;
     let flags = linux_flags_to_open_flags(args[1]);
 
     let handle = crate::fs::vfs::open(&path, flags)?;
@@ -246,7 +282,7 @@ fn sys_close(args: &[usize; 6]) -> SyscallResult {
     let kind = crate::sched::with_current_fd_table(|fdt| fdt.get_kind(fd));
     match kind {
         Ok(None) | Err(_) => return Ok(0), // closing default stdio or already closed
-        Ok(Some(_)) => {}         // has a real entry — close it below
+        Ok(Some(_)) => {}                  // has a real entry — close it below
     }
 
     // Extract the entry from the table (under scheduler lock).
@@ -375,7 +411,7 @@ struct UserStat {
 }
 
 fn sys_stat(args: &[usize; 6]) -> SyscallResult {
-    let path = copy_path_from_user(args[0])?;
+    let path = copy_and_resolve_path(args[0])?;
     let statbuf = args[1];
 
     validate_user_ptr(statbuf)?;
@@ -414,7 +450,7 @@ fn sys_stat(args: &[usize; 6]) -> SyscallResult {
 // ---------------------------------------------------------------------------
 
 fn sys_mkdir(args: &[usize; 6]) -> SyscallResult {
-    let path = copy_path_from_user(args[0])?;
+    let path = copy_and_resolve_path(args[0])?;
     crate::fs::vfs::mkdir(&path)?;
     Ok(0)
 }
@@ -424,7 +460,7 @@ fn sys_mkdir(args: &[usize; 6]) -> SyscallResult {
 // ---------------------------------------------------------------------------
 
 fn sys_unlink(args: &[usize; 6]) -> SyscallResult {
-    let path = copy_path_from_user(args[0])?;
+    let path = copy_and_resolve_path(args[0])?;
     crate::fs::vfs::unlink(&path)?;
     Ok(0)
 }
@@ -446,7 +482,7 @@ struct UserDirEntry {
 }
 
 fn sys_readdir(args: &[usize; 6]) -> SyscallResult {
-    let path = copy_path_from_user(args[0])?;
+    let path = copy_and_resolve_path(args[0])?;
     let buf_ptr = args[1];
     let buf_len = args[2];
 
@@ -551,7 +587,7 @@ fn sys_getcwd(args: &[usize; 6]) -> SyscallResult {
 // ---------------------------------------------------------------------------
 
 fn sys_chdir(args: &[usize; 6]) -> SyscallResult {
-    let path = copy_path_from_user(args[0])?;
+    let path = copy_and_resolve_path(args[0])?;
 
     // Verify the path is a directory.
     let stat = crate::fs::vfs::stat(&path)?;
@@ -779,8 +815,7 @@ fn sys_brk(args: &[usize; 6]) -> SyscallResult {
         // Growing: allocate and map new pages.
         let mut addr = cur_brk;
         while addr < new_brk {
-            let frame =
-                crate::mm::frame::alloc_frame().ok_or(SyscallError::NoMemory)?;
+            let frame = crate::mm::frame::alloc_frame().ok_or(SyscallError::NoMemory)?;
 
             // Zero the frame.
             unsafe {
@@ -790,10 +825,7 @@ fn sys_brk(args: &[usize; 6]) -> SyscallResult {
 
             // Map into the current task's address space.
             let result = crate::sched::with_current_task(|task| {
-                let aspace = task
-                    .aspace
-                    .as_mut()
-                    .ok_or(SyscallError::InvalidArgument)?;
+                let aspace = task.aspace.as_mut().ok_or(SyscallError::InvalidArgument)?;
                 aspace
                     .map(VirtAddr::new(addr), frame, PageFlags::USER_RW)
                     .map_err(|_| SyscallError::NoMemory)?;
@@ -818,10 +850,7 @@ fn sys_brk(args: &[usize; 6]) -> SyscallResult {
         let mut addr = new_brk;
         while addr < cur_brk {
             let _ = crate::sched::with_current_task(|task| {
-                let aspace = task
-                    .aspace
-                    .as_mut()
-                    .ok_or(SyscallError::InvalidArgument)?;
+                let aspace = task.aspace.as_mut().ok_or(SyscallError::InvalidArgument)?;
                 match aspace.unmap(VirtAddr::new(addr)) {
                     Ok(phys) => {
                         crate::mm::frame::dealloc_frame(phys);

@@ -54,13 +54,15 @@ DISK_SIZE_MB  := 64
 ESP_DIR       := $(BUILD_DIR)/esp
 EFI_BINARY    := $(BUILD_DIR)/$(UEFI_TARGET)/release/eithne.efi
 
-# User shell (Rust crate)
-USER_SHELL_DIR := user/shell
-USER_INIT_ELF  := $(BUILD_DIR)/$(USER_TARGET)/release/shell
+# User programs
+USER_BIN_DIR   := $(BUILD_DIR)/$(USER_TARGET)/release
+USER_INIT_ELF  := $(USER_BIN_DIR)/shell
+USER_BINS      := cat ls mkdir rm stat write
 
 # ESP layout
 ESP_BOOT_DIR  := $(ESP_DIR)/EFI/BOOT
 ESP_APP_DIR   := $(ESP_DIR)/EFI/eithne
+ESP_BIN_DIR   := $(ESP_DIR)/EFI/eithne/bin
 
 # ---------------------------------------------------------------------------
 # Phony targets
@@ -72,9 +74,9 @@ all: esp
 
 kernel: $(EFI_BINARY)
 
-user: $(USER_INIT_ELF)
+user: $(USER_INIT_ELF) $(foreach b,$(USER_BINS),$(USER_BIN_DIR)/$(b))
 
-esp: $(ESP_BOOT_DIR)/$(BOOT_FILE) $(ESP_APP_DIR)/init
+esp: $(ESP_BOOT_DIR)/$(BOOT_FILE) $(ESP_APP_DIR)/init $(foreach b,$(USER_BINS),$(ESP_BIN_DIR)/$(b))
 
 disk: $(DISK_IMG)
 
@@ -111,7 +113,7 @@ run-gui: esp $(DISK_IMG)
 
 clippy:
 	$(CARGO) clippy --target $(UEFI_TARGET) $(CARGO_FLAGS) -p eithne -- -D warnings
-	cd $(USER_SHELL_DIR) && $(CARGO) clippy $(CARGO_FLAGS) -- -D warnings
+	$(CARGO) clippy --target $(USER_TARGET) $(CARGO_FLAGS) -p shell $(foreach b,$(USER_BINS),-p $(b)) -- -D warnings
 
 check: kernel clippy
 
@@ -130,21 +132,25 @@ $(EFI_BINARY): FORCE
 	@echo "==> Building kernel for $(UEFI_TARGET)..."
 	$(CARGO) build --target $(UEFI_TARGET) $(CARGO_FLAGS) -p eithne
 
-# User shell (Rust crate)
-$(USER_INIT_ELF): FORCE
-	@echo "==> Building user shell..."
-	cd $(USER_SHELL_DIR) && $(CARGO) build $(CARGO_FLAGS)
+# User programs (all built with one cargo invocation)
+$(USER_INIT_ELF) $(foreach b,$(USER_BINS),$(USER_BIN_DIR)/$(b)): FORCE
+	@echo "==> Building user programs..."
+	$(CARGO) build --target $(USER_TARGET) $(CARGO_FLAGS) -p shell $(foreach b,$(USER_BINS),-p $(b))
 
-# ESP: always re-copy after cargo build (cargo's own dep tracking decides
-# whether the binary actually changed; we just ensure the ESP is current).
+# ESP: kernel
 $(ESP_BOOT_DIR)/$(BOOT_FILE): FORCE $(EFI_BINARY) | $(ESP_BOOT_DIR)
 	cp $(EFI_BINARY) $@
 
+# ESP: init (shell)
 $(ESP_APP_DIR)/init: FORCE $(USER_INIT_ELF) | $(ESP_APP_DIR)
 	cp $(USER_INIT_ELF) $@
 
+# ESP: /bin/ programs
+$(ESP_BIN_DIR)/%: FORCE $(USER_BIN_DIR)/% | $(ESP_BIN_DIR)
+	cp $(USER_BIN_DIR)/$* $@
+
 # Directory creation
-$(ESP_BOOT_DIR) $(ESP_APP_DIR):
+$(ESP_BOOT_DIR) $(ESP_APP_DIR) $(ESP_BIN_DIR):
 	mkdir -p $@
 
 # Disk image for virtio-blk (created once, reused across runs).

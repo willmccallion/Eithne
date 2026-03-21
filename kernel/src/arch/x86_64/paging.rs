@@ -29,7 +29,7 @@ static BOOT_CR3: Once<PhysAddr> = Once::new();
 /// Must be called once during init, after the higher-half direct map is
 /// set up but before any user processes are spawned.
 pub fn save_boot_mappings() {
-    BOOT_CR3.call_once(|| {
+    let _ = BOOT_CR3.call_once(|| {
         let cr3: u64;
         unsafe { asm!("mov {}, cr3", out(reg) cr3, options(nomem, nostack)) };
         PhysAddr::new(cr3 & flags::ADDR_MASK)
@@ -72,26 +72,26 @@ impl PageTableEntry {
         Self(0)
     }
 
-    fn is_present(self) -> bool {
+    const fn is_present(self) -> bool {
         self.0 & flags::PRESENT != 0
     }
 
-    fn phys_addr(self) -> PhysAddr {
+    const fn phys_addr(self) -> PhysAddr {
         PhysAddr::new(self.0 & flags::ADDR_MASK)
     }
 
     /// Set this entry to point to the given physical frame with the given flags.
-    fn set(&mut self, phys: PhysAddr, entry_flags: u64) {
+    const fn set(&mut self, phys: PhysAddr, entry_flags: u64) {
         self.0 = (phys.as_u64() & flags::ADDR_MASK) | entry_flags;
     }
 
-    fn clear(&mut self) {
+    const fn clear(&mut self) {
         self.0 = 0;
     }
 
     /// Convert `PageFlags` to x86_64 hardware flag bits for an intermediate
     /// table entry (always present+writable; user bit follows the leaf).
-    fn intermediate_flags(user: bool) -> u64 {
+    const fn intermediate_flags(user: bool) -> u64 {
         let mut f = flags::PRESENT | flags::WRITABLE;
         if user {
             f |= flags::USER;
@@ -100,7 +100,7 @@ impl PageTableEntry {
     }
 
     /// Convert `PageFlags` to x86_64 hardware flag bits for a leaf (4 KiB page).
-    fn leaf_flags(pf: PageFlags) -> u64 {
+    const fn leaf_flags(pf: PageFlags) -> u64 {
         let mut f = flags::PRESENT;
         if pf.writable {
             f |= flags::WRITABLE;
@@ -132,7 +132,7 @@ struct PageTable {
 impl PageTable {
     /// Zero-initialize all entries.
     fn zero(&mut self) {
-        for e in self.entries.iter_mut() {
+        for e in &mut self.entries {
             *e = PageTableEntry::empty();
         }
     }
@@ -145,7 +145,7 @@ impl PageTable {
 /// Split a virtual address into its four 9-bit page table indices and the
 /// 12-bit page offset.
 #[inline]
-fn va_indices(va: VirtAddr) -> (usize, usize, usize, usize, usize) {
+const fn va_indices(va: VirtAddr) -> (usize, usize, usize, usize, usize) {
     let v = va.as_u64();
     let pml4 = ((v >> 39) & 0x1FF) as usize;
     let pdpt = ((v >> 30) & 0x1FF) as usize;
@@ -207,6 +207,7 @@ impl KernelAddressSpace {
     /// User pages must be mapped into regions that don't overlap with
     /// existing kernel/UEFI mappings — use `find_free_user_base()` to pick
     /// a safe virtual address range.
+    #[allow(clippy::expect_used)] // Boot-time invariant: save_boot_mappings() must be called first.
     pub fn new_with_kernel_mappings() -> Result<Self, crate::mm::traits::MapError> {
         let new = Self::new().ok_or(crate::mm::traits::MapError::FrameAllocationFailed)?;
 
@@ -259,7 +260,7 @@ impl KernelAddressSpace {
     }
 
     /// Physical address of the PML4 table.
-    pub fn cr3(&self) -> PhysAddr {
+    pub const fn cr3(&self) -> PhysAddr {
         self.cr3
     }
 
@@ -334,7 +335,8 @@ impl KernelAddressSpace {
         Ok(child)
     }
 
-    fn pml4(&mut self) -> &mut PageTable {
+    #[allow(clippy::mut_from_ref)] // Physical memory backing is mutable; &self only borrows the CR3 value
+    fn pml4(&self) -> &mut PageTable {
         let virt = phys_to_virt(self.cr3);
         unsafe { &mut *(virt.as_mut_ptr::<PageTable>()) }
     }
@@ -529,7 +531,7 @@ impl AddressSpace for KernelAddressSpace {
     fn unmap_region(&mut self, virt_start: VirtAddr, size: usize) -> Result<(), UnmapError> {
         let mut offset = 0u64;
         while offset < size as u64 {
-            self.unmap(virt_start.offset(offset))?;
+            let _ = self.unmap(virt_start.offset(offset))?;
             offset += PAGE_SIZE as u64;
         }
         Ok(())
@@ -563,7 +565,7 @@ pub fn flush_tlb() {
 // ---------------------------------------------------------------------------
 
 /// Reconstruct `PageFlags` from a raw x86_64 leaf PTE.
-fn pte_to_page_flags(entry: PageTableEntry) -> PageFlags {
+const fn pte_to_page_flags(entry: PageTableEntry) -> PageFlags {
     PageFlags {
         readable: true,
         writable: entry.0 & flags::WRITABLE != 0,
@@ -574,7 +576,7 @@ fn pte_to_page_flags(entry: PageTableEntry) -> PageFlags {
 }
 
 /// Reconstruct a virtual address from its four 9-bit page table indices.
-fn vaddr_from_indices(pml4: usize, pdpt: usize, pd: usize, pt: usize) -> u64 {
+const fn vaddr_from_indices(pml4: usize, pdpt: usize, pd: usize, pt: usize) -> u64 {
     let raw =
         ((pml4 as u64) << 39) | ((pdpt as u64) << 30) | ((pd as u64) << 21) | ((pt as u64) << 12);
     // Sign-extend bit 47 to bits 48..63 for canonical addresses.
@@ -598,6 +600,7 @@ fn vaddr_from_indices(pml4: usize, pdpt: usize, pd: usize, pt: usize) -> u64 {
 ///
 /// Uses 1 GiB pages (PDPT huge entries) to map `max_phys` bytes with
 /// minimal page table overhead: one PDPT per 512 GiB, one entry per GiB.
+#[allow(clippy::expect_used)] // OOM during early boot is unrecoverable — panic is the only option.
 pub fn init_higher_half(max_phys: u64) {
     use crate::mm::layout::KERNEL_VIRT_BASE;
 
@@ -676,6 +679,7 @@ pub fn init_higher_half(max_phys: u64) {
 
 /// Basic sanity check: allocate a fresh address space, map one page, translate
 /// it, unmap it, and verify translate returns None.
+#[allow(clippy::expect_used)] // Test function — expect is appropriate for test assertions.
 pub fn test_paging() {
     let mut aspace = KernelAddressSpace::new().expect("[paging] OOM creating test address space");
 
@@ -696,7 +700,7 @@ pub fn test_paging() {
         "[paging] translate returned wrong address"
     );
 
-    aspace.unmap(test_virt).expect("[paging] unmap failed");
+    let _ = aspace.unmap(test_virt).expect("[paging] unmap failed");
 
     assert!(
         aspace.translate(test_virt).is_none(),

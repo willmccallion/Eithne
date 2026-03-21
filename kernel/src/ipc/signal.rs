@@ -48,7 +48,7 @@ pub enum DefaultAction {
 }
 
 /// Return the default action for a signal number.
-pub fn default_action(sig: u8) -> DefaultAction {
+pub const fn default_action(sig: u8) -> DefaultAction {
     match sig {
         SIGCHLD => DefaultAction::Ignore,
         _ => DefaultAction::Terminate,
@@ -77,7 +77,7 @@ pub struct SignalState {
 
 impl SignalState {
     /// Create a new signal state with all defaults.
-    pub fn new() -> Self {
+    pub const fn new() -> Self {
         Self {
             pending: 0,
             blocked: 0,
@@ -88,7 +88,7 @@ impl SignalState {
 
     /// Convert a signal number to its bitmask. Returns 0 for out-of-range.
     #[inline]
-    pub fn sig_bit(sig: u8) -> u32 {
+    pub const fn sig_bit(sig: u8) -> u32 {
         if sig == 0 || sig as usize >= NSIG {
             0
         } else {
@@ -98,12 +98,12 @@ impl SignalState {
 
     /// Returns the bitmask of signals that are pending and not blocked.
     #[inline]
-    pub fn deliverable(&self) -> u32 {
+    pub const fn deliverable(&self) -> u32 {
         self.pending & !self.blocked
     }
 
-    /// Returns the lowest-numbered deliverable signal, or None.
-    pub fn next_deliverable(&self) -> Option<u8> {
+    /// Returns the lowest-numbered deliverable signal, or `None`.
+    pub const fn next_deliverable(&self) -> Option<u8> {
         let d = self.deliverable();
         if d == 0 {
             None
@@ -114,7 +114,7 @@ impl SignalState {
 
     /// Returns true if there are any deliverable pending signals.
     #[inline]
-    pub fn has_deliverable(&self) -> bool {
+    pub const fn has_deliverable(&self) -> bool {
         self.deliverable() != 0
     }
 }
@@ -132,7 +132,7 @@ pub struct SigActionUser {
     pub flags: u64,
     /// Additional signals to block during handler execution.
     pub mask: u32,
-    pub _pad: u32,
+    pub pad: u32,
 }
 
 // ---------------------------------------------------------------------------
@@ -163,7 +163,7 @@ pub struct SigFrame {
     pub saved_r10: u64,
     /// Signal mask to restore on sigreturn.
     pub saved_mask: u32,
-    pub _pad: u32,
+    pub pad: u32,
 }
 
 /// Sigreturn trampoline: `mov eax, 15; syscall; ud2`
@@ -205,14 +205,12 @@ pub fn send_signal_locked(
         return false;
     }
 
-    let task = match guard.find_task_mut(tid) {
-        Some(t) => t,
-        None => return false,
+    let Some(task) = guard.find_task_mut(tid) else {
+        return false;
     };
 
-    let sig_state = match task.signals.as_mut() {
-        Some(s) => s,
-        None => return false, // kernel thread
+    let Some(sig_state) = task.signals.as_mut() else {
+        return false; // kernel thread
     };
 
     // Always set pending, even if blocked (delivered when unblocked).
@@ -241,8 +239,7 @@ pub fn has_pending_signal_locked(
     guard
         .current_task_mut()
         .and_then(|t| t.signals.as_ref())
-        .map(|s| s.has_deliverable())
-        .unwrap_or(false)
+        .is_some_and(SignalState::has_deliverable)
 }
 
 // ---------------------------------------------------------------------------
@@ -284,7 +281,7 @@ enum SignalDisposition {
 /// This function acquires and releases the scheduler lock internally.
 pub fn deliver_pending_signal(frame: &mut crate::arch::x86_64::syscall::SyscallFrame) {
     // Only deliver signals when returning to user mode.
-    if frame.cs & 3 == 0 {
+    if frame.cs.trailing_zeros() >= 2 {
         return;
     }
 
@@ -293,17 +290,14 @@ pub fn deliver_pending_signal(frame: &mut crate::arch::x86_64::syscall::SyscallF
         let disposition = crate::sched::with_scheduler(|guard| {
             // First pass: read signal info from current task.
             let (sig, action) = {
-                let task = match guard.current_task_mut() {
-                    Some(t) => t,
-                    None => return SignalDisposition::None,
+                let Some(task) = guard.current_task_mut() else {
+                    return SignalDisposition::None;
                 };
-                let sig_state = match task.signals.as_mut() {
-                    Some(s) => s,
-                    None => return SignalDisposition::None,
+                let Some(sig_state) = task.signals.as_mut() else {
+                    return SignalDisposition::None;
                 };
-                let sig = match sig_state.next_deliverable() {
-                    Some(s) => s,
-                    None => return SignalDisposition::None,
+                let Some(sig) = sig_state.next_deliverable() else {
+                    return SignalDisposition::None;
                 };
                 let bit = SignalState::sig_bit(sig);
                 sig_state.pending &= !bit;
@@ -332,8 +326,7 @@ pub fn deliver_pending_signal(frame: &mut crate::arch::x86_64::syscall::SyscallF
                             let fds = guard
                                 .current_task_mut()
                                 .and_then(|t| t.fd_table.as_mut())
-                                .map(|fdt| fdt.drain_all())
-                                .unwrap_or_default();
+                                .map_or_else(alloc::vec::Vec::new, crate::sched::fd::FdTable::drain_all);
 
                             guard.kill_current_with_status(status);
 
@@ -341,7 +334,7 @@ pub fn deliver_pending_signal(frame: &mut crate::arch::x86_64::syscall::SyscallF
                                 guard.reparent_children(my_id, crate::sched::traits::TaskId(2));
                             }
                             if let Some(parent_id) = guard.current_parent() {
-                                guard.wake_task(parent_id);
+                                let _ = guard.wake_task(parent_id);
                             }
 
                             SignalDisposition::Terminate(fds)
@@ -353,8 +346,7 @@ pub fn deliver_pending_signal(frame: &mut crate::arch::x86_64::syscall::SyscallF
                     let old_mask = guard
                         .current_task_mut()
                         .and_then(|t| t.signals.as_ref())
-                        .map(|s| s.saved_mask)
-                        .unwrap_or(0);
+                        .map_or(0, |s| s.saved_mask);
                     SignalDisposition::Handler(DeliverInfo {
                         sig,
                         handler: addr,
@@ -366,7 +358,7 @@ pub fn deliver_pending_signal(frame: &mut crate::arch::x86_64::syscall::SyscallF
 
         match disposition {
             Some(SignalDisposition::None) | None => return,
-            Some(SignalDisposition::Ignored) => continue,
+            Some(SignalDisposition::Ignored) => {},
             Some(SignalDisposition::Terminate(fds)) => {
                 // Close fds outside the scheduler lock.
                 for kind in fds {
@@ -395,7 +387,7 @@ pub fn deliver_pending_signal(frame: &mut crate::arch::x86_64::syscall::SyscallF
 
 /// Push a `SigFrame` + sigreturn trampoline onto the user stack and
 /// rewrite the frame to jump to the signal handler.
-fn push_sigframe(frame: &mut crate::arch::x86_64::syscall::SyscallFrame, info: &DeliverInfo) {
+const fn push_sigframe(frame: &mut crate::arch::x86_64::syscall::SyscallFrame, info: &DeliverInfo) {
     let user_rsp = frame.rsp;
 
     // Layout on user stack (growing downward):
@@ -435,7 +427,7 @@ fn push_sigframe(frame: &mut crate::arch::x86_64::syscall::SyscallFrame, info: &
             saved_r9: frame.r9,
             saved_r10: frame.r10,
             saved_mask: info.old_mask,
-            _pad: 0,
+            pad: 0,
         });
     }
 

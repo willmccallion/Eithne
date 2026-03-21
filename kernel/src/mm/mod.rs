@@ -15,6 +15,8 @@ pub use traits::{FrameAllocator, PageMapper};
 /// UEFI memory information. After this returns, the `alloc` crate
 /// (Vec, Box, String, etc.) is available.
 pub fn init(boot_info: &boot_info::BootMemoryInfo) {
+    extern crate alloc;
+
     crate::println!(
         "[mm] {} usable regions, {} pages ({} MiB), max_phys={}",
         boot_info.region_count,
@@ -35,7 +37,6 @@ pub fn init(boot_info: &boot_info::BootMemoryInfo) {
     // Heap allocator is already wired via #[global_allocator] in heap.rs.
     // It lazily calls frame::alloc_frame() on first use.
     // Verify it works:
-    extern crate alloc;
     let v = alloc::vec![1u64, 2, 3, 4, 5];
     crate::println!("[mm] heap test: {:?}", v);
     drop(v);

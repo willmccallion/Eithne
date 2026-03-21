@@ -28,9 +28,9 @@ static FB: Once<IrqSpinlock<FrameBuffer>> = Once::new();
 ///
 /// Converts the physical base address to a virtual address via the
 /// higher-half direct map.
-pub fn init(info: FrameBufferInfo) {
+pub fn init(info: &FrameBufferInfo) {
     let virt = phys_to_virt(PhysAddr::new(info.base));
-    FB.call_once(|| {
+    let _ = FB.call_once(|| {
         IrqSpinlock::new(FrameBuffer {
             ptr: virt.as_mut_ptr::<u8>(),
             width: info.width,
@@ -55,6 +55,7 @@ fn put_pixel(fb: &FrameBuffer, x: usize, y: usize, r: u8, g: u8, b: u8) {
     };
     unsafe {
         let dst = fb.ptr.add(offset);
+        #[allow(clippy::volatile_composites)]
         core::ptr::write_volatile(dst as *mut [u8; 4], pixel);
     }
 }
@@ -72,6 +73,7 @@ fn fill_rect(fb: &FrameBuffer, x: usize, y: usize, w: usize, h: usize, r: u8, g:
         for col in 0..core::cmp::min(w, fb.width.saturating_sub(x)) {
             let offset = row_start + col * 4;
             unsafe {
+                #[allow(clippy::cast_ptr_alignment)]
                 core::ptr::write_volatile(fb.ptr.add(offset) as *mut u32, pixel);
             }
         }

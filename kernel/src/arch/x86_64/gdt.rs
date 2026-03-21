@@ -94,7 +94,7 @@ impl Tss {
             ist: [0; 7],
             _reserved2: 0,
             _reserved3: 0,
-            iomap_base: core::mem::size_of::<Tss>() as u16,
+            iomap_base: core::mem::size_of::<Self>() as u16,
         }
     }
 }
@@ -157,6 +157,7 @@ struct GdtPointer {
 
 /// Initialize the GDT with TSS and IST stacks.
 /// Must be called after mm::init() (needs frame allocator for IST stacks).
+#[allow(clippy::expect_used)] // OOM during boot is unrecoverable — panic is the only option.
 pub fn init() {
     crate::println!("[gdt] initializing");
 

@@ -4,7 +4,7 @@
 //! identity-mapped memory. This module handles any additional early
 //! setup before the generic kernel takes over.
 
-pub fn post_uefi_init() {
+pub const fn post_uefi_init() {
     // UEFI has already set up:
     // - Long mode (64-bit)
     // - Identity-mapped page tables

@@ -1,6 +1,7 @@
 use super::addr::{PhysAddr, VirtAddr};
 
 /// Flags controlling page permissions and attributes.
+#[allow(clippy::struct_excessive_bools)]
 #[derive(Debug, Clone, Copy)]
 pub struct PageFlags {
     pub readable: bool,

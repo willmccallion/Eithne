@@ -2,9 +2,9 @@ extern crate alloc;
 
 use core::mem;
 
-use crate::io::*;
-use crate::path::*;
-use crate::syscall::*;
+use crate::io::{print, CLR_BOLD, CLR_RESET, print_bytes, print_error, CLR_BLUE, println, print_num, CLR_RED, print_hex, CLR_GREEN, STDIN, STDOUT};
+use crate::path::{resolve_path, bytes_to_str, split_first, parse_usize};
+use crate::syscall::{DirEntry, sys_readdir, DT_DIR, sys_open, O_RDONLY, sys_read, sys_close, O_WRONLY, O_CREAT, O_TRUNC, sys_write, sys_mkdir, sys_unlink, StatBuf, sys_stat, sys_chdir, sys_exit, SIGTERM, sys_kill, sys_sbrk};
 
 pub fn cmd_help() {
     print("commands:\n");
@@ -90,13 +90,14 @@ pub fn cmd_echo(args: &[u8]) {
     print("\n");
 }
 
+#[allow(clippy::large_stack_arrays, clippy::cast_ptr_alignment)]
 pub fn cmd_ls(args: &[u8], cwd: &[u8]) {
+    const ENTRY_SIZE: usize = mem::size_of::<DirEntry>();
+    const MAX_ENTRIES: usize = 64;
+
     let arg = if args.is_empty() { b"." as &[u8] } else { args };
     let (resolved, rlen) = resolve_path(cwd, arg);
     let path = bytes_to_str(&resolved[..rlen]);
-
-    const ENTRY_SIZE: usize = mem::size_of::<DirEntry>();
-    const MAX_ENTRIES: usize = 64;
     let mut buf = [0u8; ENTRY_SIZE * MAX_ENTRIES];
 
     let ret = sys_readdir(path, &mut buf);
@@ -148,7 +149,7 @@ pub fn cmd_cat(args: &[u8], cwd: &[u8]) {
     }
     print("\n");
 
-    sys_close(fd);
+    let _ = sys_close(fd);
 }
 
 pub fn cmd_write(args: &[u8], cwd: &[u8]) {
@@ -177,7 +178,7 @@ pub fn cmd_write(args: &[u8], cwd: &[u8]) {
         print_error("write: write", n);
     }
 
-    sys_close(fd);
+    let _ = sys_close(fd);
 }
 
 pub fn cmd_mkdir(args: &[u8], cwd: &[u8]) {
@@ -235,7 +236,7 @@ pub fn cmd_cd(args: &[u8], cwd: &mut [u8; 256], cwd_len: &mut usize) {
     if args.is_empty() {
         cwd[0] = b'/';
         *cwd_len = 1;
-        sys_chdir("/");
+        let _ = sys_chdir("/");
         return;
     }
 
@@ -412,6 +413,6 @@ pub fn cat_stdin() {
         if n <= 0 {
             break;
         }
-        sys_write(STDOUT, &buf[..n as usize]);
+        let _ = sys_write(STDOUT, &buf[..n as usize]);
     }
 }

@@ -77,7 +77,7 @@ impl IdtEntry {
     }
 
     /// Interrupt gate (type 0xE) — clears IF on entry.
-    fn interrupt_gate(handler: u64, selector: u16, ist_index: u8, dpl: u8) -> Self {
+    const fn interrupt_gate(handler: u64, selector: u16, ist_index: u8, dpl: u8) -> Self {
         Self {
             offset_low: handler as u16,
             selector,
@@ -90,7 +90,7 @@ impl IdtEntry {
     }
 
     /// Trap gate (type 0xF) — does NOT clear IF. Used for #BP, #OF.
-    fn trap_gate(handler: u64, selector: u16, ist_index: u8, dpl: u8) -> Self {
+    const fn trap_gate(handler: u64, selector: u16, ist_index: u8, dpl: u8) -> Self {
         Self {
             offset_low: handler as u16,
             selector,
@@ -476,6 +476,7 @@ pub fn init() {
 extern "C" fn interrupt_dispatch(frame: &InterruptFrame) {
     let v = frame.vector as u8;
 
+    #[allow(clippy::enum_glob_use, clippy::items_after_statements)]
     use Vector::*;
     match v {
         v if v == DivideError as u8 => exception_halt("Divide Error (#DE)", frame),

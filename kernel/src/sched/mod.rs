@@ -41,7 +41,7 @@ pub static NEED_RESCHED: AtomicBool = AtomicBool::new(false);
 // ---------------------------------------------------------------------------
 
 pub fn init() {
-    SCHEDULER.call_once(|| IrqSpinlock::new(RoundRobinScheduler::new()));
+    let _ = SCHEDULER.call_once(|| IrqSpinlock::new(RoundRobinScheduler::new()));
     crate::println!("[sched] round-robin scheduler initialized");
 }
 
@@ -87,9 +87,8 @@ where
 
 /// Called from the timer IRQ handler each tick.
 pub fn timer_tick() {
-    let sched = match SCHEDULER.get() {
-        Some(s) => s,
-        None => return,
+    let Some(sched) = SCHEDULER.get() else {
+        return;
     };
     if sched.lock().tick_check() {
         NEED_RESCHED.store(true, Ordering::Release);
@@ -110,27 +109,21 @@ pub extern "C" fn check_resched(interrupted_rsp: u64) -> u64 {
         maybe_deliver_signals(interrupted_rsp);
         return 0;
     }
-    let sched = match SCHEDULER.get() {
-        Some(s) => s,
-        None => {
-            maybe_deliver_signals(interrupted_rsp);
-            return 0;
-        }
+    let Some(sched) = SCHEDULER.get() else {
+        maybe_deliver_signals(interrupted_rsp);
+        return 0;
     };
     let switch = sched.lock().prepare_switch_preempt(interrupted_rsp);
     // Scheduler lock is now dropped.
 
-    match switch {
-        Some((new_rsp, kstack_top, cr3)) => {
-            activate_task(kstack_top, cr3);
-            // Check signals on the NEW task's frame before resuming it.
-            maybe_deliver_signals(new_rsp);
-            new_rsp
-        }
-        None => {
-            maybe_deliver_signals(interrupted_rsp);
-            0
-        }
+    if let Some((new_rsp, kstack_top, cr3)) = switch {
+        activate_task(kstack_top, cr3);
+        // Check signals on the NEW task's frame before resuming it.
+        maybe_deliver_signals(new_rsp);
+        new_rsp
+    } else {
+        maybe_deliver_signals(interrupted_rsp);
+        0
     }
 }
 
@@ -204,6 +197,8 @@ pub fn exit_current_with_code(code: i32) -> ! {
 
     // Phase 1: Under the scheduler lock, drain all fds and mark the task Dead.
     let fds_to_close = {
+        // Panic is acceptable: this is only called after scheduler init.
+        #[allow(clippy::expect_used)]
         let sched = SCHEDULER.get().expect("scheduler not init");
         let mut guard = sched.lock();
 
@@ -211,7 +206,7 @@ pub fn exit_current_with_code(code: i32) -> ! {
         let fds = guard
             .current_task_mut()
             .and_then(|t| t.fd_table.as_mut())
-            .map(|fdt| fdt.drain_all())
+            .map(fd::FdTable::drain_all)
             .unwrap_or_default();
 
         // Record exit status.
@@ -224,12 +219,12 @@ pub fn exit_current_with_code(code: i32) -> ! {
 
         // Send SIGCHLD to the parent and wake it.
         if let Some(parent_id) = guard.current_parent() {
-            crate::ipc::signal::send_signal_locked(
+            let _ = crate::ipc::signal::send_signal_locked(
                 &mut guard,
                 parent_id,
                 crate::ipc::signal::SIGCHLD,
             );
-            guard.wake_task(parent_id);
+            let _ = guard.wake_task(parent_id);
         }
 
         fds
@@ -259,7 +254,6 @@ pub fn exit_current_with_code(code: i32) -> ! {
 /// Returns `Err(NoChildren)` if the caller has no children.
 pub fn wait_for_child(child_pid: u64) -> Result<(u64, i32), crate::syscall::traits::SyscallError> {
     use crate::syscall::traits::SyscallError;
-
     loop {
         let should_block = {
             let sched = SCHEDULER.get().ok_or(SyscallError::IoError)?;
@@ -290,11 +284,10 @@ pub fn wait_for_child(child_pid: u64) -> Result<(u64, i32), crate::syscall::trai
         // After waking: check if we were woken by a signal.
         let has_signal = SCHEDULER
             .get()
-            .map(|s| {
+            .is_some_and(|s| {
                 let mut guard = s.lock();
                 crate::ipc::signal::has_pending_signal_locked(&mut guard)
-            })
-            .unwrap_or(false);
+            });
         if has_signal {
             return Err(SyscallError::Interrupted);
         }
@@ -315,9 +308,8 @@ pub fn wait_for_child(child_pid: u64) -> Result<(u64, i32), crate::syscall::trai
 /// `wake_reader()` before the task is actually marked Blocked.
 pub fn block_current_if(should_block: impl FnOnce() -> bool) {
     let pending = {
-        let sched = match SCHEDULER.get() {
-            Some(s) => s,
-            None => return,
+        let Some(sched) = SCHEDULER.get() else {
+            return;
         };
         let mut guard = sched.lock();
         // Re-check with interrupts disabled: if data arrived between the
@@ -344,9 +336,8 @@ pub fn block_current_if_interruptible(
     should_block: impl FnOnce() -> bool,
 ) -> Result<(), crate::syscall::traits::SyscallError> {
     let pending = {
-        let sched = match SCHEDULER.get() {
-            Some(s) => s,
-            None => return Ok(()),
+        let Some(sched) = SCHEDULER.get() else {
+            return Ok(());
         };
         let mut guard = sched.lock();
         if !should_block() {
@@ -364,11 +355,10 @@ pub fn block_current_if_interruptible(
     // After waking: check if we were woken by a signal.
     let has_signal = SCHEDULER
         .get()
-        .map(|s| {
+        .is_some_and(|s| {
             let mut guard = s.lock();
             crate::ipc::signal::has_pending_signal_locked(&mut guard)
-        })
-        .unwrap_or(false);
+        });
 
     if has_signal {
         Err(crate::syscall::traits::SyscallError::Interrupted)
@@ -383,9 +373,8 @@ pub fn block_current_if_interruptible(
 /// Also sets NEED_RESCHED so that `check_resched` switches to the woken
 /// task on the very next interrupt return, rather than waiting for a timer tick.
 pub fn wake_serial_reader(tid: u64) {
-    let sched = match SCHEDULER.get() {
-        Some(s) => s,
-        None => return,
+    let Some(sched) = SCHEDULER.get() else {
+        return;
     };
     if sched.lock().wake_task(TaskId(tid)) {
         NEED_RESCHED.store(true, Ordering::Release);
@@ -397,9 +386,8 @@ pub fn wake_serial_reader(tid: u64) {
 /// Acquires the scheduler lock internally. If the target task is blocked
 /// and the signal is not blocked, the task is woken.
 pub fn send_signal_to(tid: TaskId, sig: u8) -> bool {
-    let sched = match SCHEDULER.get() {
-        Some(s) => s,
-        None => return false,
+    let Some(sched) = SCHEDULER.get() else {
+        return false;
     };
     let mut guard = sched.lock();
     let posted = crate::ipc::signal::send_signal_locked(&mut guard, tid, sig);
@@ -412,9 +400,8 @@ pub fn send_signal_to(tid: TaskId, sig: u8) -> bool {
 /// Wake a task blocked on a pipe read or write. Called from `pipe_close`,
 /// `pipe_read`, and `pipe_write` after releasing the PIPES lock.
 pub fn wake_pipe_task(tid: u64) {
-    let sched = match SCHEDULER.get() {
-        Some(s) => s,
-        None => return,
+    let Some(sched) = SCHEDULER.get() else {
+        return;
     };
     if sched.lock().wake_task(TaskId(tid)) {
         NEED_RESCHED.store(true, Ordering::Release);
@@ -427,9 +414,8 @@ pub fn wake_pipe_task(tid: u64) {
 /// current task's RSP, then resumes the next task via `iretq`.
 pub fn yield_cpu() {
     let pending = {
-        let sched = match SCHEDULER.get() {
-            Some(s) => s,
-            None => return,
+        let Some(sched) = SCHEDULER.get() else {
+            return;
         };
         sched.lock().prepare_switch()
     };

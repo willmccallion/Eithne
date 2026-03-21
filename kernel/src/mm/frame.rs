@@ -21,8 +21,8 @@ use crate::sync::{Once, Spinlock};
 /// Minimum page size is 4 KiB, so there's always room for two pointers.
 #[repr(C)]
 struct FreeBlock {
-    next: *mut FreeBlock,
-    prev: *mut FreeBlock,
+    next: *mut Self,
+    prev: *mut Self,
 }
 
 /// Head of a circular doubly-linked free list for one buddy order.
@@ -42,8 +42,9 @@ impl FreeList {
         }
     }
 
+    #[allow(clippy::inline_always)]
     #[inline(always)]
-    fn is_empty(&self) -> bool {
+    const fn is_empty(&self) -> bool {
         self.head.is_null()
     }
 
@@ -314,6 +315,7 @@ impl BuddyAllocator {
 
     /// Toggle the XOR buddy bit for the pair containing `addr` at `order`.
     /// Returns the *previous* value of the bit.
+    #[allow(clippy::inline_always)]
     #[inline(always)]
     fn toggle_buddy_bit(&mut self, addr: u64, order: usize) -> bool {
         let pfn = (addr / PAGE_SIZE as u64) as usize;
@@ -330,14 +332,14 @@ impl BuddyAllocator {
 
     /// Push a block onto a free list and toggle its buddy bit.
     fn free_list_push(&mut self, addr: u64, order: usize) {
-        self.toggle_buddy_bit(addr, order);
+        let _ = self.toggle_buddy_bit(addr, order);
         self.free_lists[order].push(addr);
     }
 
     /// Pop a block from a free list and toggle its buddy bit.
     fn free_list_pop(&mut self, order: usize) -> u64 {
         let addr = self.free_lists[order].pop();
-        self.toggle_buddy_bit(addr, order);
+        let _ = self.toggle_buddy_bit(addr, order);
         addr
     }
 }
@@ -352,11 +354,11 @@ impl FrameAllocator for BuddyAllocator {
     }
 
     fn alloc_pages(&mut self, order: usize) -> Option<PhysAddr> {
-        BuddyAllocator::alloc_pages(self, order)
+        Self::alloc_pages(self, order)
     }
 
     fn dealloc_pages(&mut self, addr: PhysAddr, order: usize) {
-        BuddyAllocator::dealloc_pages(self, addr, order);
+        Self::dealloc_pages(self, addr, order);
     }
 
     fn free_frame_count(&self) -> usize {
@@ -372,7 +374,7 @@ static FRAME_ALLOCATOR: Once<Spinlock<BuddyAllocator>> = Once::new();
 
 /// Initialize the global frame allocator. Must be called once during boot.
 pub fn init(boot_info: &BootMemoryInfo) {
-    FRAME_ALLOCATOR.call_once(|| Spinlock::new(BuddyAllocator::init(boot_info)));
+    let _ = FRAME_ALLOCATOR.call_once(|| Spinlock::new(BuddyAllocator::init(boot_info)));
 }
 
 /// Allocate a single 4 KiB frame.
@@ -403,6 +405,5 @@ pub fn dealloc_pages(addr: PhysAddr, order: usize) {
 pub fn free_page_count() -> usize {
     FRAME_ALLOCATOR
         .get()
-        .map(|a| a.lock().free_pages)
-        .unwrap_or(0)
+        .map_or(0, |a| a.lock().free_pages)
 }

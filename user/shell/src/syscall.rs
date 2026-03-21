@@ -37,6 +37,7 @@ pub const O_APPEND: usize = 0x400;
 /// Linux directory entry type for directories.
 pub const DT_DIR: u8 = 4;
 
+#[allow(clippy::inline_always)]
 #[inline(always)]
 unsafe fn syscall0(num: usize) -> isize {
     let ret: isize;
@@ -52,6 +53,7 @@ unsafe fn syscall0(num: usize) -> isize {
     ret
 }
 
+#[allow(clippy::inline_always)]
 #[inline(always)]
 unsafe fn syscall1(num: usize, a1: usize) -> isize {
     let ret: isize;
@@ -68,6 +70,7 @@ unsafe fn syscall1(num: usize, a1: usize) -> isize {
     ret
 }
 
+#[allow(clippy::inline_always)]
 #[inline(always)]
 unsafe fn syscall2(num: usize, a1: usize, a2: usize) -> isize {
     let ret: isize;
@@ -85,6 +88,7 @@ unsafe fn syscall2(num: usize, a1: usize, a2: usize) -> isize {
     ret
 }
 
+#[allow(clippy::inline_always)]
 #[inline(always)]
 unsafe fn syscall3(num: usize, a1: usize, a2: usize, a3: usize) -> isize {
     let ret: isize;
@@ -154,7 +158,7 @@ pub fn sys_readdir(path: &str, buf: &mut [u8]) -> isize {
 
 pub fn sys_exit(code: usize) -> ! {
     unsafe {
-        syscall1(SYS_EXIT, code);
+        let _ = syscall1(SYS_EXIT, code);
     }
     #[allow(clippy::empty_loop)]
     loop {}
@@ -282,15 +286,15 @@ impl StatBuf {
         }
     }
 
-    pub fn is_dir(&self) -> bool {
+    pub const fn is_dir(&self) -> bool {
         (self.st_mode & 0o170000) == 0o040000
     }
 
-    pub fn is_file(&self) -> bool {
+    pub const fn is_file(&self) -> bool {
         (self.st_mode & 0o170000) == 0o100000
     }
 
-    pub fn type_str(&self) -> &'static str {
+    pub const fn type_str(&self) -> &'static str {
         let fmt = self.st_mode & 0o170000;
         match fmt {
             0o100000 => "file",
@@ -321,7 +325,7 @@ impl DirEntry {
         &self.d_name[..self.d_name_len as usize]
     }
 
-    pub fn type_indicator(&self) -> &'static str {
+    pub const fn type_indicator(&self) -> &'static str {
         match self.d_type {
             DT_DIR => "/",
             _ => "",

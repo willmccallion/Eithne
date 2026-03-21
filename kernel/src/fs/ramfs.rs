@@ -11,7 +11,7 @@ use alloc::vec::Vec;
 
 use crate::sync::IrqSpinlock;
 
-use super::traits::*;
+use super::traits::{FileType, OpenFlags, FsError, FileSystem, FileHandle, File, FileStat, DirEntry};
 
 struct Inode {
     file_type: FileType,
@@ -62,18 +62,16 @@ impl RamFsInner {
         if path.is_empty() {
             return Err(FsError::InvalidPath); // can't get parent of root
         }
-        match path.rfind('/') {
-            Some(pos) => {
-                let parent_path = if pos == 0 { "/" } else { &path[..pos] };
-                let name = &path[pos + 1..];
-                if name.is_empty() {
-                    return Err(FsError::InvalidPath);
-                }
-                let parent_ino = self.resolve_path(parent_path)?;
-                Ok((parent_ino, name))
-            }
-            None => Err(FsError::InvalidPath),
+        let Some(pos) = path.rfind('/') else {
+            return Err(FsError::InvalidPath);
+        };
+        let parent_path = if pos == 0 { "/" } else { &path[..pos] };
+        let name = &path[pos + 1..];
+        if name.is_empty() {
+            return Err(FsError::InvalidPath);
         }
+        let parent_ino = self.resolve_path(parent_path)?;
+        Ok((parent_ino, name))
     }
 
     /// Allocate a new inode and return its inode number.
@@ -99,7 +97,7 @@ impl RamFs {
             data: Vec::new(),
             children: BTreeMap::new(),
         };
-        RamFs {
+        Self {
             inner: IrqSpinlock::new(RamFsInner {
                 inodes: vec![root],
                 open_files: BTreeMap::new(),
@@ -110,7 +108,7 @@ impl RamFs {
 }
 
 impl FileSystem for RamFs {
-    fn name(&self) -> &str {
+    fn name(&self) -> &'static str {
         "ramfs"
     }
 
@@ -130,7 +128,7 @@ impl FileSystem for RamFs {
                     return Err(FsError::NotADirectory);
                 }
                 let new_ino = inner.alloc_inode(FileType::Regular);
-                inner.inodes[parent_ino as usize]
+                let _ = inner.inodes[parent_ino as usize]
                     .children
                     .insert(String::from(name), new_ino);
                 new_ino
@@ -145,7 +143,7 @@ impl FileSystem for RamFs {
         } else {
             0
         };
-        inner
+        let _ = inner
             .open_files
             .insert(handle_id, OpenFile { ino, cursor, flags });
         Ok(FileHandle(handle_id))
@@ -169,7 +167,11 @@ impl FileSystem for RamFs {
         buf[..to_read].copy_from_slice(&inode.data[cursor..cursor + to_read]);
 
         // Update cursor (immutable borrow of inodes is done).
-        inner.open_files.get_mut(&handle.0).unwrap().cursor += to_read;
+        // Cursor update: entry was already validated above, so absence is unreachable.
+        #[allow(clippy::unwrap_used)]
+        {
+            inner.open_files.get_mut(&handle.0).unwrap().cursor += to_read;
+        }
         Ok(to_read)
     }
 
@@ -192,13 +194,17 @@ impl FileSystem for RamFs {
         }
         inode.data[cursor..new_end].copy_from_slice(buf);
 
-        inner.open_files.get_mut(&handle.0).unwrap().cursor = new_end;
+        // Cursor update: entry was already validated above, so absence is unreachable.
+        #[allow(clippy::unwrap_used)]
+        {
+            inner.open_files.get_mut(&handle.0).unwrap().cursor = new_end;
+        }
         Ok(buf.len())
     }
 
     fn close(&self, handle: FileHandle) -> Result<(), FsError> {
         let mut inner = self.inner.lock();
-        inner
+        let _ = inner
             .open_files
             .remove(&handle.0)
             .ok_or(FsError::NotFound)?;
@@ -215,7 +221,7 @@ impl FileSystem for RamFs {
         };
         let new_id = inner.next_handle;
         inner.next_handle += 1;
-        inner.open_files.insert(new_id, new_file);
+        let _ = inner.open_files.insert(new_id, new_file);
         Ok(FileHandle(new_id))
     }
 
@@ -269,7 +275,7 @@ impl FileSystem for RamFs {
         }
 
         let new_ino = inner.alloc_inode(FileType::Directory);
-        inner.inodes[parent_ino as usize]
+        let _ = inner.inodes[parent_ino as usize]
             .children
             .insert(String::from(name), new_ino);
         Ok(())
@@ -291,7 +297,7 @@ impl FileSystem for RamFs {
             return Err(FsError::IsADirectory);
         }
 
-        inner.inodes[parent_ino as usize].children.remove(name);
+        let _ = inner.inodes[parent_ino as usize].children.remove(name);
         Ok(())
     }
 }

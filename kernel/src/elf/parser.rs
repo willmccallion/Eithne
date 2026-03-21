@@ -35,6 +35,7 @@ pub const R_X86_64_RELATIVE: u32 = 8;
 // ELF64 header (64 bytes)
 // ---------------------------------------------------------------------------
 
+#[allow(clippy::struct_field_names)]
 #[derive(Debug, Clone, Copy)]
 #[repr(C)]
 pub struct Elf64Header {
@@ -60,6 +61,7 @@ const _: () = assert!(mem::size_of::<Elf64Header>() == 64);
 // ELF64 program header (56 bytes)
 // ---------------------------------------------------------------------------
 
+#[allow(clippy::struct_field_names)]
 #[derive(Debug, Clone, Copy)]
 #[repr(C)]
 pub struct Elf64Phdr {
@@ -79,6 +81,7 @@ const _: () = assert!(mem::size_of::<Elf64Phdr>() == 56);
 // ELF64 relocation entry with addend (24 bytes)
 // ---------------------------------------------------------------------------
 
+#[allow(clippy::struct_field_names)]
 #[derive(Debug, Clone, Copy)]
 #[repr(C)]
 pub struct Elf64Rela {
@@ -91,7 +94,7 @@ const _: () = assert!(mem::size_of::<Elf64Rela>() == 24);
 
 impl Elf64Rela {
     /// Extract the relocation type from r_info.
-    pub fn r_type(&self) -> u32 {
+    pub const fn r_type(&self) -> u32 {
         (self.r_info & 0xFFFF_FFFF) as u32
     }
 }
@@ -137,6 +140,7 @@ pub struct Elf64Info<'a> {
 
 impl<'a> Elf64Info<'a> {
     /// Parse and validate an ELF64 executable from raw bytes.
+    #[allow(clippy::cast_ptr_alignment)]
     pub fn parse(data: &'a [u8]) -> Result<Self, ElfParseError> {
         if data.len() < mem::size_of::<Elf64Header>() {
             return Err(ElfParseError::TooSmall);
@@ -177,11 +181,12 @@ impl<'a> Elf64Info<'a> {
     }
 
     /// Entry point virtual address from the ELF header.
-    pub fn entry_point(&self) -> u64 {
+    pub const fn entry_point(&self) -> u64 {
         self.header.e_entry
     }
 
     /// Iterate over PT_LOAD program headers.
+    #[allow(clippy::cast_ptr_alignment)]
     pub fn load_segments(&self) -> impl Iterator<Item = &Elf64Phdr> {
         let count = self.header.e_phnum as usize;
         let base = self.header.e_phoff as usize;
@@ -210,11 +215,12 @@ impl<'a> Elf64Info<'a> {
     }
 
     /// True if this is a position-independent executable (ET_DYN).
-    pub fn is_pie(&self) -> bool {
+    pub const fn is_pie(&self) -> bool {
         self.header.e_type == ET_DYN
     }
 
     /// Iterate over all program headers.
+    #[allow(clippy::cast_ptr_alignment)]
     fn phdrs(&self) -> impl Iterator<Item = &Elf64Phdr> {
         let count = self.header.e_phnum as usize;
         let base = self.header.e_phoff as usize;
@@ -235,6 +241,7 @@ impl<'a> Elf64Info<'a> {
     ///
     /// Returns a slice of `Elf64Rela` entries from the ELF data, or `None`
     /// if there is no dynamic segment or no RELA entries.
+    #[allow(clippy::cast_ptr_alignment)]
     pub fn rela_entries(&self) -> Option<&[Elf64Rela]> {
         let dyn_phdr = self.dynamic_segment()?;
         let dyn_offset = dyn_phdr.p_offset as usize;
@@ -301,7 +308,7 @@ impl<'a> Elf64Info<'a> {
     }
 
     /// The raw ELF data.
-    pub fn data(&self) -> &[u8] {
+    pub const fn data(&self) -> &[u8] {
         self.data
     }
 }

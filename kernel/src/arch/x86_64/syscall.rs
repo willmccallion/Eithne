@@ -277,7 +277,7 @@ const ENOSYS: u64 = 38;
 const EPIPE: u64 = 32;
 const ENOEXEC: u64 = 8;
 
-fn syscall_error_to_errno(e: crate::syscall::traits::SyscallError) -> u64 {
+const fn syscall_error_to_errno(e: crate::syscall::traits::SyscallError) -> u64 {
     use crate::syscall::traits::SyscallError;
     match e {
         SyscallError::InvalidSyscall => ENOSYS,
@@ -365,9 +365,8 @@ fn do_fork(parent_frame: &SyscallFrame) -> u64 {
 
     // Gather info from the current (parent) task under the scheduler lock.
     let result = crate::sched::with_scheduler(|guard| {
-        let cur = match guard.current_task_mut() {
-            Some(t) => t,
-            None => return Err(ENOMEM),
+        let Some(cur) = guard.current_task_mut() else {
+            return Err(ENOMEM);
         };
 
         let parent_id = cur.id;
@@ -411,10 +410,10 @@ fn do_fork(parent_frame: &SyscallFrame) -> u64 {
 
     // Allocate child kernel stack.
     let kernel_stack_pages = TaskStack::STACK_PAGES;
-    let kstack_phys = match frame::alloc_pages(crate::mm::page::pages_to_order(kernel_stack_pages))
-    {
-        Some(p) => p,
-        None => return ENOMEM.wrapping_neg(),
+    let Some(kstack_phys) =
+        frame::alloc_pages(crate::mm::page::pages_to_order(kernel_stack_pages))
+    else {
+        return ENOMEM.wrapping_neg();
     };
     let kstack_base = phys_to_virt(kstack_phys);
     let kstack_top = kstack_base.offset((kernel_stack_pages * PAGE_SIZE) as u64);
@@ -451,9 +450,8 @@ fn do_fork(parent_frame: &SyscallFrame) -> u64 {
     }
 
     // Build child Task and add to scheduler.
-    let child_id = match crate::sched::alloc_id() {
-        Some(id) => id,
-        None => return ENOMEM.wrapping_neg(),
+    let Some(child_id) = crate::sched::alloc_id() else {
+        return ENOMEM.wrapping_neg();
     };
 
     let child_task = Task {
@@ -593,12 +591,9 @@ fn do_exec(frame: &mut SyscallFrame) {
     let argv_ptr = frame.rsi as usize;
 
     // Copy path from user space (old address space still active).
-    let path = match crate::syscall::dispatch::copy_path_from_user(path_ptr) {
-        Ok(p) => p,
-        Err(_) => {
-            frame.rax = EINVAL.wrapping_neg();
-            return;
-        }
+    let Ok(path) = crate::syscall::dispatch::copy_path_from_user(path_ptr) else {
+        frame.rax = EINVAL.wrapping_neg();
+        return;
     };
 
     // Copy argv from user space (old address space still active).
@@ -611,30 +606,21 @@ fn do_exec(frame: &mut SyscallFrame) {
     };
 
     // Read the entire file from VFS.
-    let file_data = match read_file_from_vfs(path.as_str()) {
-        Ok(data) => data,
-        Err(_) => {
-            frame.rax = ENOENT.wrapping_neg();
-            return;
-        }
+    let Ok(file_data) = read_file_from_vfs(path.as_str()) else {
+        frame.rax = ENOENT.wrapping_neg();
+        return;
     };
 
     // Parse ELF.
-    let elf = match Elf64Info::parse(file_data.as_slice()) {
-        Ok(e) => e,
-        Err(_) => {
-            frame.rax = ENOEXEC.wrapping_neg();
-            return;
-        }
+    let Ok(elf) = Elf64Info::parse(file_data.as_slice()) else {
+        frame.rax = ENOEXEC.wrapping_neg();
+        return;
     };
 
     // Load into new address space.
-    let loaded = match loader::load_elf(&elf) {
-        Ok(l) => l,
-        Err(_) => {
-            frame.rax = ENOMEM.wrapping_neg();
-            return;
-        }
+    let Ok(loaded) = loader::load_elf(&elf) else {
+        frame.rax = ENOMEM.wrapping_neg();
+        return;
     };
 
     // Close close-on-exec FDs and swap address space.
@@ -657,7 +643,7 @@ fn do_exec(frame: &mut SyscallFrame) {
             // POSIX exec: reset caught signals to SIG_DFL, clear pending.
             // SIG_IGN dispositions are preserved across exec.
             if let Some(ref mut sig) = task.signals {
-                for action in sig.actions.iter_mut() {
+                for action in &mut sig.actions {
                     if let crate::ipc::signal::SigAction::Handler(_) = *action {
                         *action = crate::ipc::signal::SigAction::Default;
                     }
@@ -667,13 +653,11 @@ fn do_exec(frame: &mut SyscallFrame) {
 
             Ok(fds)
         });
-        match result {
-            Ok(fds) => fds,
-            Err(_) => {
-                frame.rax = ENOMEM.wrapping_neg();
-                return;
-            }
-        }
+        let Ok(fds) = result else {
+            frame.rax = ENOMEM.wrapping_neg();
+            return;
+        };
+        fds
     };
     // Scheduler lock dropped — safe to close pipes/VFS handles.
     for kind in cloexec_fds {
@@ -689,7 +673,7 @@ fn do_exec(frame: &mut SyscallFrame) {
 
     // Activate the new address space.
     let new_cr3 = crate::sched::with_current_task(|task| {
-        Ok(task.aspace.as_ref().map(|a| a.cr3().as_u64()).unwrap_or(0))
+        Ok(task.aspace.as_ref().map_or(0, |a| a.cr3().as_u64()))
     })
     .unwrap_or(0);
     if new_cr3 != 0 {

@@ -28,25 +28,22 @@ impl<T> Once<T> {
             return unsafe { (*self.data.get()).as_ref().unwrap_unchecked() };
         }
 
-        match self
+        if self
             .state
             .compare_exchange(UNINIT, RUNNING, Ordering::Acquire, Ordering::Relaxed)
+            .is_ok()
         {
-            Ok(_) => {
-                unsafe {
-                    *self.data.get() = Some(f());
-                }
-                self.state.store(COMPLETE, Ordering::Release);
-                unsafe { (*self.data.get()).as_ref().unwrap_unchecked() }
+            unsafe {
+                *self.data.get() = Some(f());
             }
-            Err(_) => {
-                // Another thread is initializing — spin until complete.
-                while self.state.load(Ordering::Acquire) != COMPLETE {
-                    core::hint::spin_loop();
-                }
-                unsafe { (*self.data.get()).as_ref().unwrap_unchecked() }
+            self.state.store(COMPLETE, Ordering::Release);
+        } else {
+            // Another thread is initializing — spin until complete.
+            while self.state.load(Ordering::Acquire) != COMPLETE {
+                core::hint::spin_loop();
             }
         }
+        unsafe { (*self.data.get()).as_ref().unwrap_unchecked() }
     }
 
     /// Get the value if initialized, None otherwise.

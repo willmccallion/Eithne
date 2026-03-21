@@ -17,9 +17,12 @@ const NUM_SIZE_CLASSES: usize = 9;
 const SIZE_CLASSES: [usize; NUM_SIZE_CLASSES] = [8, 16, 32, 64, 128, 256, 512, 1024, 2048];
 
 /// Find the size class index for a layout, or None if too large for slabs.
+#[allow(clippy::inline_always)]
 #[inline(always)]
-fn size_class_index(layout: Layout) -> Option<usize> {
-    let size = layout.size().max(layout.align());
+const fn size_class_index(layout: Layout) -> Option<usize> {
+    let s = layout.size();
+    let a = layout.align();
+    let size = if s > a { s } else { a };
     // Binary search through size classes
     let mut i = 0;
     while i < NUM_SIZE_CLASSES {
@@ -35,7 +38,7 @@ fn size_class_index(layout: Layout) -> Option<usize> {
 /// Minimum size class is 8 bytes, which fits a single pointer.
 #[repr(C)]
 struct FreeObject {
-    next: *mut FreeObject,
+    next: *mut Self,
 }
 
 /// Per-size-class slab cache.
@@ -56,10 +59,10 @@ impl SlabCache {
     }
 
     /// Allocate a new slab page and thread all its objects into the free list.
+    #[allow(clippy::cast_ptr_alignment)]
     fn grow(&mut self) -> bool {
-        let page = match frame::alloc_frame() {
-            Some(p) => p,
-            None => return false,
+        let Some(page) = frame::alloc_frame() else {
+            return false;
         };
 
         let base = page.as_u64() as *mut u8;
@@ -90,6 +93,7 @@ impl SlabCache {
         obj as *mut u8
     }
 
+    #[allow(clippy::cast_ptr_alignment)]
     fn dealloc(&mut self, ptr: *mut u8) {
         let obj = ptr as *mut FreeObject;
         unsafe {
@@ -132,18 +136,12 @@ unsafe impl GlobalAlloc for KernelHeapAllocator {
             self.caches[idx].lock().alloc()
         } else if layout.size() <= PAGE_SIZE {
             // Fits in one page but doesn't match a slab size class
-            match frame::alloc_frame() {
-                Some(addr) => addr.as_u64() as *mut u8,
-                None => ptr::null_mut(),
-            }
+            frame::alloc_frame().map_or(ptr::null_mut(), |addr| addr.as_u64() as *mut u8)
         } else {
             // Large: round up to pages, use buddy allocator
             let pages = layout.size().div_ceil(PAGE_SIZE);
             let order = pages.next_power_of_two().trailing_zeros() as usize;
-            match frame::alloc_pages(order) {
-                Some(addr) => addr.as_u64() as *mut u8,
-                None => ptr::null_mut(),
-            }
+            frame::alloc_pages(order).map_or(ptr::null_mut(), |addr| addr.as_u64() as *mut u8)
         }
     }
 

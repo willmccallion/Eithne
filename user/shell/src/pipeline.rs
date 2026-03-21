@@ -1,9 +1,11 @@
-use crate::builtins::*;
-use crate::exec::*;
-use crate::io::*;
-use crate::path::*;
-use crate::redirect::*;
-use crate::syscall::*;
+use core::cmp::Ordering;
+
+use crate::builtins::{cmd_echo, cat_stdin, cmd_cat, cmd_ls, cmd_pwd, cmd_stat, cmd_help};
+use crate::exec::{EXEC_FAILURE_EXIT_CODE, build_argv};
+use crate::io::{LINE_MAX, print_error, STDIN, STDOUT};
+use crate::path::{trim, split_first, resolve_path, bytes_to_str};
+use crate::redirect::{parse_redirects, has_redirects, apply_redirects};
+use crate::syscall::{sys_pipe, sys_close, sys_fork, SigActionUser, SIG_DFL, sys_sigaction, SIGINT, sys_dup2, sys_exit, sys_waitpid, sys_exec};
 
 /// Maximum number of pipeline stages.
 const MAX_PIPELINE_STAGES: usize = 8;
@@ -28,8 +30,8 @@ pub fn cmd_pipeline(input: &[u8], cwd: &[u8]) {
             print_error("pipe", ret);
             // Clean up any already-created pipes.
             for pipe in &pipes[..i] {
-                sys_close(pipe[0] as usize);
-                sys_close(pipe[1] as usize);
+                let _ = sys_close(pipe[0] as usize);
+                let _ = sys_close(pipe[1] as usize);
             }
             return;
         }
@@ -41,52 +43,56 @@ pub fn cmd_pipeline(input: &[u8], cwd: &[u8]) {
 
     for i in 0..n {
         let pid = sys_fork();
-        if pid == 0 {
-            // ---- Child process for stage i ----
+        match pid.cmp(&0) {
+            Ordering::Equal => {
+                // ---- Child process for stage i ----
 
-            // Reset SIGINT to default (shell had SIG_IGN).
-            let dfl_act = SigActionUser {
-                handler: SIG_DFL,
-                flags: 0,
-                mask: 0,
-                _pad: 0,
-            };
-            sys_sigaction(SIGINT, &dfl_act as *const SigActionUser as usize, 0);
+                // Reset SIGINT to default (shell had SIG_IGN).
+                let dfl_act = SigActionUser {
+                    handler: SIG_DFL,
+                    flags: 0,
+                    mask: 0,
+                    _pad: 0,
+                };
+                let _ = sys_sigaction(SIGINT, &dfl_act as *const SigActionUser as usize, 0);
 
-            // Wire up stdin from previous pipe's read end (except first stage).
-            if i > 0 {
-                sys_dup2(pipes[i - 1][0] as usize, STDIN);
+                // Wire up stdin from previous pipe's read end (except first stage).
+                if i > 0 {
+                    let _ = sys_dup2(pipes[i - 1][0] as usize, STDIN);
+                }
+
+                // Wire up stdout to current pipe's write end (except last stage).
+                if i < n - 1 {
+                    let _ = sys_dup2(pipes[i][1] as usize, STDOUT);
+                }
+
+                // Close all pipe fds in the child (they've been dup2'd as needed).
+                for pipe in &pipes[..n - 1] {
+                    let _ = sys_close(pipe[0] as usize);
+                    let _ = sys_close(pipe[1] as usize);
+                }
+
+                // Dispatch this stage's command.
+                let stage = &stages[i][..stage_lens[i]];
+                run_pipeline_stage(stage, cwd);
+                // Should not return.
+                sys_exit(0);
             }
-
-            // Wire up stdout to current pipe's write end (except last stage).
-            if i < n - 1 {
-                sys_dup2(pipes[i][1] as usize, STDOUT);
+            Ordering::Greater => {
+                pids[i] = pid;
             }
-
-            // Close all pipe fds in the child (they've been dup2'd as needed).
-            for pipe in &pipes[..n - 1] {
-                sys_close(pipe[0] as usize);
-                sys_close(pipe[1] as usize);
+            Ordering::Less => {
+                print_error("fork", pid);
+                fork_ok = false;
+                break;
             }
-
-            // Dispatch this stage's command.
-            let stage = &stages[i][..stage_lens[i]];
-            run_pipeline_stage(stage, cwd);
-            // Should not return.
-            sys_exit(0);
-        } else if pid > 0 {
-            pids[i] = pid;
-        } else {
-            print_error("fork", pid);
-            fork_ok = false;
-            break;
         }
     }
 
     // Parent: close all pipe fds.
     for pipe in &pipes[..n - 1] {
-        sys_close(pipe[0] as usize);
-        sys_close(pipe[1] as usize);
+        let _ = sys_close(pipe[0] as usize);
+        let _ = sys_close(pipe[1] as usize);
     }
 
     // Wait for all children, retrying on EINTR.

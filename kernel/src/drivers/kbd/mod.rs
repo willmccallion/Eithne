@@ -121,7 +121,7 @@ pub fn handle_scancode(scancode: u8) {
     if CTRL_HELD.load(Ordering::Relaxed) && scancode == KEY_C {
         let tid = crate::drivers::serial::SERIAL_READER_TID.load(Ordering::Acquire);
         if tid != 0 {
-            crate::sched::send_signal_to(
+            let _ = crate::sched::send_signal_to(
                 crate::sched::traits::TaskId(tid),
                 crate::ipc::signal::SIGINT,
             );

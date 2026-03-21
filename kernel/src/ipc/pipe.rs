@@ -59,7 +59,7 @@ struct PipeInner {
 }
 
 impl PipeInner {
-    fn new() -> Self {
+    const fn new() -> Self {
         Self {
             buf: [0u8; PIPE_BUF_SIZE],
             read_pos: 0,
@@ -75,7 +75,7 @@ impl PipeInner {
     /// Copy up to `dst.len()` bytes out of the ring buffer.
     fn read_into(&mut self, dst: &mut [u8]) -> usize {
         let n = dst.len().min(self.count);
-        for byte in dst[..n].iter_mut() {
+        for byte in &mut dst[..n] {
             *byte = self.buf[self.read_pos];
             self.read_pos = (self.read_pos + 1) % PIPE_BUF_SIZE;
         }
@@ -108,7 +108,7 @@ struct PipeTable {
 static PIPES: Once<IrqSpinlock<PipeTable>> = Once::new();
 
 pub fn init() {
-    PIPES.call_once(|| {
+    let _ = PIPES.call_once(|| {
         IrqSpinlock::new(PipeTable {
             pipes: BTreeMap::new(),
             next_id: 1,
@@ -127,7 +127,7 @@ pub fn pipe_create() -> Option<(PipeHandle, PipeHandle)> {
     let mut guard = table.lock();
     let id = guard.next_id;
     guard.next_id += 1;
-    guard.pipes.insert(id, PipeInner::new());
+    let _ = guard.pipes.insert(id, PipeInner::new());
     Some((
         PipeHandle {
             pipe_id: PipeId(id),
@@ -182,15 +182,14 @@ pub fn pipe_read(id: PipeId, buf: &mut [u8]) -> Result<usize, SyscallError> {
         // (interrupts disabled). Acquiring the PIPES lock inside is safe
         // because the lock ordering is scheduler → PIPES.
         sched::block_current_if_interruptible(|| {
-            let table = match PIPES.get() {
-                Some(t) => t,
-                None => return false,
+            let Some(table) = PIPES.get() else {
+                return false;
             };
             let guard = table.lock();
-            match guard.pipes.get(&id.0) {
-                Some(p) => p.count == 0 && p.writers > 0,
-                None => false, // pipe gone, don't block
-            }
+            guard
+                .pipes
+                .get(&id.0)
+                .is_some_and(|p| p.count == 0 && p.writers > 0)
         })?;
         // Woken — loop back and re-try the read (or return EINTR).
     }
@@ -215,7 +214,7 @@ pub fn pipe_write(id: PipeId, buf: &[u8]) -> Result<usize, SyscallError> {
             // No readers — broken pipe. Send SIGPIPE to the writer.
             if pipe.readers == 0 {
                 if let Some(my_tid) = sched::current_task_id() {
-                    sched::send_signal_to(my_tid, crate::ipc::signal::SIGPIPE);
+                    let _ = sched::send_signal_to(my_tid, crate::ipc::signal::SIGPIPE);
                 }
                 return Err(SyscallError::BrokenPipe);
             }
@@ -240,15 +239,14 @@ pub fn pipe_write(id: PipeId, buf: &[u8]) -> Result<usize, SyscallError> {
 
         // Phase 2: Block until space is available.
         sched::block_current_if_interruptible(|| {
-            let table = match PIPES.get() {
-                Some(t) => t,
-                None => return false,
+            let Some(table) = PIPES.get() else {
+                return false;
             };
             let guard = table.lock();
-            match guard.pipes.get(&id.0) {
-                Some(p) => p.count >= PIPE_BUF_SIZE && p.readers > 0,
-                None => false,
-            }
+            guard
+                .pipes
+                .get(&id.0)
+                .is_some_and(|p| p.count >= PIPE_BUF_SIZE && p.readers > 0)
         })?;
     }
 
@@ -260,18 +258,16 @@ pub fn pipe_write(id: PipeId, buf: &[u8]) -> Result<usize, SyscallError> {
 /// When all readers close, blocked writers are woken (they see BrokenPipe).
 /// When both refcounts reach zero, the pipe is removed from the table.
 pub fn pipe_close(handle: PipeHandle) {
-    let table = match PIPES.get() {
-        Some(t) => t,
-        None => return,
+    let Some(table) = PIPES.get() else {
+        return;
     };
 
     let wake_tid: Option<u64>;
     let should_remove: bool;
     {
         let mut guard = table.lock();
-        let pipe = match guard.pipes.get_mut(&handle.pipe_id.0) {
-            Some(p) => p,
-            None => return,
+        let Some(pipe) = guard.pipes.get_mut(&handle.pipe_id.0) else {
+            return;
         };
 
         match handle.end {
@@ -297,7 +293,7 @@ pub fn pipe_close(handle: PipeHandle) {
 
         should_remove = pipe.readers == 0 && pipe.writers == 0;
         if should_remove {
-            guard.pipes.remove(&handle.pipe_id.0);
+            let _ = guard.pipes.remove(&handle.pipe_id.0);
         }
     }
     // PIPES lock dropped — now safe to call into the scheduler.
@@ -313,14 +309,12 @@ pub fn pipe_close(handle: PipeHandle) {
 /// safe to call while the scheduler lock is already held (lock ordering:
 /// scheduler → PIPES).
 pub fn pipe_clone(handle: &PipeHandle) {
-    let table = match PIPES.get() {
-        Some(t) => t,
-        None => return,
+    let Some(table) = PIPES.get() else {
+        return;
     };
     let mut guard = table.lock();
-    let pipe = match guard.pipes.get_mut(&handle.pipe_id.0) {
-        Some(p) => p,
-        None => return,
+    let Some(pipe) = guard.pipes.get_mut(&handle.pipe_id.0) else {
+        return;
     };
 
     match handle.end {

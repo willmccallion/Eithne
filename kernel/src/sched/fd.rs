@@ -27,7 +27,7 @@ pub struct FdTable {
 
 impl FdTable {
     /// Create an empty fd table.
-    pub fn new() -> Self {
+    pub const fn new() -> Self {
         Self {
             entries: Vec::new(),
         }
@@ -44,7 +44,7 @@ impl FdTable {
     }
 
     /// Returns true if `fd` is a stdio descriptor (0, 1, or 2).
-    pub fn is_stdio(fd: usize) -> bool {
+    pub const fn is_stdio(fd: usize) -> bool {
         fd <= 2
     }
 
@@ -91,7 +91,7 @@ impl FdTable {
         let entry = self
             .entries
             .get(fd)
-            .and_then(|e| e.as_ref())
+            .and_then(Option::as_ref)
             .ok_or(SyscallError::InvalidArgument)?;
         match &entry.kind {
             FdKind::Vfs(h) => Ok(*h),
@@ -143,7 +143,7 @@ impl FdTable {
     /// it is safe to call while the scheduler lock is already held.
     pub fn clone_table(&self) -> Self {
         let mut cloned = Vec::with_capacity(self.entries.len());
-        for slot in self.entries.iter() {
+        for slot in &self.entries {
             cloned.push(match slot {
                 Some(entry) => match &entry.kind {
                     FdKind::Pipe(handle) => {
@@ -175,7 +175,7 @@ impl FdTable {
     /// Close all FDs marked close-on-exec, returning their kinds.
     pub fn close_cloexec(&mut self) -> Vec<FdKind> {
         let mut kinds = Vec::new();
-        for slot in self.entries.iter_mut() {
+        for slot in &mut self.entries {
             if let Some(entry) = slot.as_ref()
                 && entry.cloexec
             {
@@ -216,7 +216,7 @@ impl FdTable {
     /// outside the scheduler lock.
     pub fn drain_all(&mut self) -> Vec<FdKind> {
         let mut kinds = Vec::new();
-        for slot in self.entries.iter_mut() {
+        for slot in &mut self.entries {
             if let Some(entry) = slot.take() {
                 kinds.push(entry.kind);
             }

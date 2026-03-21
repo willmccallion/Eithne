@@ -15,7 +15,7 @@ use alloc::vec::Vec;
 use crate::sync::{IrqSpinlock, Once};
 
 use super::ramfs::RamFs;
-use super::traits::*;
+use super::traits::{FileSystem, FileHandle, FsError, OpenFlags, File, FileStat, DirEntry};
 
 struct MountPoint {
     path: String,
@@ -64,18 +64,16 @@ impl VfsInner {
                 }
             }
         }
-        match best {
-            Some((idx, mount)) => {
-                let relative = if mount.path == "/" {
-                    path
-                } else {
-                    let rest = &path[mount.path.len()..];
-                    if rest.is_empty() { "/" } else { rest }
-                };
-                Ok((idx, &*mount.fs, relative))
-            }
-            None => Err(FsError::NotFound),
-        }
+        let Some((idx, mount)) = best else {
+            return Err(FsError::NotFound);
+        };
+        let relative = if mount.path == "/" {
+            path
+        } else {
+            let rest = &path[mount.path.len()..];
+            if rest.is_empty() { "/" } else { rest }
+        };
+        Ok((idx, &*mount.fs, relative))
     }
 }
 
@@ -84,8 +82,8 @@ struct Vfs {
 }
 
 impl Vfs {
-    fn new() -> Self {
-        Vfs {
+    const fn new() -> Self {
+        Self {
             inner: IrqSpinlock::new(VfsInner {
                 mounts: Vec::new(),
                 open_files: BTreeMap::new(),
@@ -110,7 +108,7 @@ impl Vfs {
 
         let vfs_handle = inner.next_handle;
         inner.next_handle += 1;
-        inner.open_files.insert(
+        let _ = inner.open_files.insert(
             vfs_handle,
             VfsOpenFile {
                 mount_idx,
@@ -149,7 +147,7 @@ impl Vfs {
 
         let new_vfs_handle = inner.next_handle;
         inner.next_handle += 1;
-        inner.open_files.insert(
+        let _ = inner.open_files.insert(
             new_vfs_handle,
             VfsOpenFile {
                 mount_idx,
@@ -192,7 +190,7 @@ static VFS: Once<Vfs> = Once::new();
 
 /// Initialize the VFS and mount the root ramfs.
 pub fn init() {
-    VFS.call_once(|| {
+    let _ = VFS.call_once(|| {
         let vfs = Vfs::new();
         vfs.mount("/", Box::new(RamFs::new()));
         vfs

@@ -2,6 +2,7 @@ extern crate alloc;
 use alloc::vec::Vec;
 
 /// File open mode flags.
+#[allow(clippy::struct_excessive_bools)]
 #[derive(Debug, Clone, Copy)]
 pub struct OpenFlags {
     pub read: bool,
@@ -79,7 +80,7 @@ pub enum FsError {
 /// Each filesystem implementation (ramfs, ext4, fat32, etc.) implements this trait.
 pub trait FileSystem {
     /// Return the filesystem type name.
-    fn name(&self) -> &str;
+    fn name(&self) -> &'static str;
 
     /// Open a file by path within this filesystem.
     fn open(&self, path: &str, flags: OpenFlags) -> Result<FileHandle, FsError>;

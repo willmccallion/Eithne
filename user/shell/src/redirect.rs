@@ -1,6 +1,6 @@
-use crate::io::*;
-use crate::path::*;
-use crate::syscall::*;
+use crate::io::{LINE_MAX, print_error, STDIN, STDOUT};
+use crate::path::{resolve_path, bytes_to_str};
+use crate::syscall::{sys_open, O_RDONLY, sys_dup2, sys_close, O_WRONLY, O_CREAT, O_APPEND, O_TRUNC};
 
 /// Parsed redirection targets for a single command.
 pub struct Redirects {
@@ -25,11 +25,11 @@ impl Redirects {
         }
     }
 
-    pub fn has_stdin(&self) -> bool {
+    pub const fn has_stdin(&self) -> bool {
         self.stdin_len > 0
     }
 
-    pub fn has_stdout(&self) -> bool {
+    pub const fn has_stdout(&self) -> bool {
         self.stdout_len > 0
     }
 }
@@ -111,8 +111,8 @@ pub fn apply_redirects(redir: &Redirects, cwd: &[u8]) -> bool {
             print_error("redirect: open <", fd);
             return false;
         }
-        sys_dup2(fd as usize, STDIN);
-        sys_close(fd as usize);
+        let _ = sys_dup2(fd as usize, STDIN);
+        let _ = sys_close(fd as usize);
     }
 
     if redir.has_stdout() {
@@ -128,15 +128,15 @@ pub fn apply_redirects(redir: &Redirects, cwd: &[u8]) -> bool {
             print_error("redirect: open >", fd);
             return false;
         }
-        sys_dup2(fd as usize, STDOUT);
-        sys_close(fd as usize);
+        let _ = sys_dup2(fd as usize, STDOUT);
+        let _ = sys_close(fd as usize);
     }
 
     true
 }
 
 /// Check if a byte slice contains any redirection operators.
-pub fn has_redirects(input: &[u8]) -> bool {
+pub const fn has_redirects(input: &[u8]) -> bool {
     let mut i = 0;
     while i < input.len() {
         if input[i] == b'>' || input[i] == b'<' {

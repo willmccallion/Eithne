@@ -42,7 +42,7 @@ pub struct PendingSwitch {
 unsafe impl Send for PendingSwitch {}
 
 impl RoundRobinScheduler {
-    pub fn new() -> Self {
+    pub const fn new() -> Self {
         Self {
             queue: VecDeque::new(),
             current: None,
@@ -53,13 +53,13 @@ impl RoundRobinScheduler {
         }
     }
 
-    pub fn alloc_id(&mut self) -> TaskId {
+    pub const fn alloc_id(&mut self) -> TaskId {
         let id = TaskId(self.next_id);
         self.next_id += 1;
         id
     }
 
-    fn task_cr3(task: &Task) -> u64 {
+    const fn task_cr3(task: &Task) -> u64 {
         #[cfg(target_arch = "x86_64")]
         if let Some(ref aspace) = task.aspace {
             return aspace.cr3().as_u64();
@@ -101,7 +101,10 @@ impl RoundRobinScheduler {
                     prev.state = TaskState::Ready;
                 }
                 self.queue.push_back(prev);
-                &mut self.queue.back_mut().unwrap().saved_rsp as *mut u64
+                // SAFETY: we just pushed, so back_mut() is guaranteed Some.
+                unsafe {
+                    &mut self.queue.back_mut().unwrap_unchecked().saved_rsp as *mut u64
+                }
             }
         } else {
             &mut self.boot_rsp as *mut u64
@@ -158,7 +161,7 @@ impl RoundRobinScheduler {
     }
 
     /// Mark the currently running task as Dead so it won't be re-queued.
-    pub fn kill_current(&mut self) {
+    pub const fn kill_current(&mut self) {
         if let Some(ref mut cur) = self.current {
             cur.state = TaskState::Dead;
         }
@@ -168,7 +171,7 @@ impl RoundRobinScheduler {
     ///
     /// The task will be re-queued but skipped by `pop_next_ready()` until
     /// `wake_blocked()` sets it back to `Ready`.
-    pub fn block_current(&mut self) {
+    pub const fn block_current(&mut self) {
         if let Some(ref mut cur) = self.current {
             cur.state = TaskState::Blocked;
         }
@@ -178,7 +181,7 @@ impl RoundRobinScheduler {
     ///
     /// Returns `true` if a task was woken.
     pub fn wake_blocked(&mut self) -> bool {
-        for task in self.queue.iter_mut() {
+        for task in &mut self.queue {
             if task.state == TaskState::Blocked {
                 task.state = TaskState::Ready;
                 return true;
@@ -188,7 +191,7 @@ impl RoundRobinScheduler {
     }
 
     /// Decrement timeslice; return true when expired.
-    pub fn tick_check(&mut self) -> bool {
+    pub const fn tick_check(&mut self) -> bool {
         if self.ticks_remaining > 0 {
             self.ticks_remaining -= 1;
         }
@@ -210,7 +213,7 @@ impl RoundRobinScheduler {
     }
 
     /// Mark the current task as Dead with the given wait status.
-    pub fn kill_current_with_status(&mut self, status: i32) {
+    pub const fn kill_current_with_status(&mut self, status: i32) {
         if let Some(ref mut cur) = self.current {
             cur.state = TaskState::Dead;
             cur.exit_code = Some(status);
@@ -241,7 +244,7 @@ impl RoundRobinScheduler {
     /// Wake a specific Blocked task by TaskId (used to wake a parent waiting
     /// on waitpid).
     pub fn wake_task(&mut self, id: TaskId) -> bool {
-        for task in self.queue.iter_mut() {
+        for task in &mut self.queue {
             if task.id == id && task.state == TaskState::Blocked {
                 task.state = TaskState::Ready;
                 return true;
@@ -282,12 +285,12 @@ impl RoundRobinScheduler {
 
     /// Reparent all children (alive + zombie) of `old_parent` to `new_parent`.
     pub fn reparent_children(&mut self, old_parent: TaskId, new_parent: TaskId) {
-        for task in self.queue.iter_mut() {
+        for task in &mut self.queue {
             if task.parent == Some(old_parent) {
                 task.parent = Some(new_parent);
             }
         }
-        for z in self.zombies.iter_mut() {
+        for z in &mut self.zombies {
             if z.parent == old_parent {
                 z.parent = new_parent;
             }
@@ -305,12 +308,12 @@ impl RoundRobinScheduler {
     }
 
     /// Mutable access to the current task (used by fork/exec).
-    pub fn current_task_mut(&mut self) -> Option<&mut Task> {
+    pub const fn current_task_mut(&mut self) -> Option<&mut Task> {
         self.current.as_mut()
     }
 
     /// Immutable access to the current task.
-    pub fn current_task(&self) -> Option<&Task> {
+    pub const fn current_task(&self) -> Option<&Task> {
         self.current.as_ref()
     }
 }

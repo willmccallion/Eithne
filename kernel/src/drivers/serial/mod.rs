@@ -26,7 +26,7 @@ impl InputBuffer {
         }
     }
 
-    fn push(&mut self, byte: u8) {
+    const fn push(&mut self, byte: u8) {
         if self.count >= BUF_SIZE {
             return; // drop if full
         }
@@ -35,7 +35,7 @@ impl InputBuffer {
         self.count += 1;
     }
 
-    fn pop(&mut self) -> Option<u8> {
+    const fn pop(&mut self) -> Option<u8> {
         if self.count == 0 {
             return None;
         }
@@ -45,7 +45,7 @@ impl InputBuffer {
         Some(byte)
     }
 
-    fn is_empty(&self) -> bool {
+    const fn is_empty(&self) -> bool {
         self.count == 0
     }
 }
@@ -57,7 +57,7 @@ static SERIAL_INPUT: Once<IrqSpinlock<InputBuffer>> = Once::new();
 pub static SERIAL_READER_TID: AtomicU64 = AtomicU64::new(0);
 
 pub fn init() {
-    SERIAL_INPUT.call_once(|| IrqSpinlock::new(InputBuffer::new()));
+    let _ = SERIAL_INPUT.call_once(|| IrqSpinlock::new(InputBuffer::new()));
 }
 
 /// ASCII ETX — sent by the terminal when the user presses Ctrl+C.
@@ -72,7 +72,7 @@ pub fn push_byte(byte: u8) {
     if byte == CTRL_C {
         let tid = SERIAL_READER_TID.load(Ordering::Acquire);
         if tid != 0 {
-            crate::sched::send_signal_to(
+            let _ = crate::sched::send_signal_to(
                 crate::sched::traits::TaskId(tid),
                 crate::ipc::signal::SIGINT,
             );
@@ -87,34 +87,28 @@ pub fn push_byte(byte: u8) {
 /// Read up to `max` bytes from the input buffer into `out`.
 /// Returns the number of bytes read (0 if empty).
 pub fn read(out: &mut [u8], max: usize) -> usize {
-    let buf = match SERIAL_INPUT.get() {
-        Some(b) => b,
-        None => return 0,
+    let Some(buf) = SERIAL_INPUT.get() else {
+        return 0;
     };
     let mut guard = buf.lock();
     let mut count = 0;
     let limit = max.min(out.len());
     while count < limit {
-        match guard.pop() {
-            Some(byte) => {
-                // Use write_volatile to ensure the store reaches memory and isn't
-                // elided by the optimiser.  The destination may be a user-space
-                // buffer whose physical page is only reachable through the current
-                // page table; a plain store could theoretically be reordered or
-                // eliminated.
-                unsafe { core::ptr::write_volatile(&mut out[count], byte) };
-                count += 1;
-            }
-            None => break,
-        }
+        let Some(byte) = guard.pop() else { break };
+        // Use write_volatile to ensure the store reaches memory and isn't
+        // elided by the optimiser.  The destination may be a user-space
+        // buffer whose physical page is only reachable through the current
+        // page table; a plain store could theoretically be reordered or
+        // eliminated.
+        unsafe { core::ptr::write_volatile(&mut out[count], byte) };
+        count += 1;
     }
     count
 }
 
 /// Check if the input buffer is empty.
 pub fn is_empty() -> bool {
-    match SERIAL_INPUT.get() {
-        Some(buf) => buf.lock().is_empty(),
-        None => true,
-    }
+    SERIAL_INPUT
+        .get()
+        .is_none_or(|buf| buf.lock().is_empty())
 }

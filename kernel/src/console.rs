@@ -13,6 +13,7 @@ impl fmt::Write for Writer {
     }
 }
 
+/// Prints formatted text to the console.
 #[macro_export]
 macro_rules! print {
     ($($arg:tt)*) => {{
@@ -21,6 +22,7 @@ macro_rules! print {
     }};
 }
 
+/// Prints formatted text to the console with a trailing newline.
 #[macro_export]
 macro_rules! println {
     () => { $crate::print!("\n") };

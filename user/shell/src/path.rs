@@ -77,7 +77,7 @@ pub fn resolve_path(cwd: &[u8], arg: &[u8]) -> ([u8; 256], usize) {
     (result, rlen)
 }
 
-pub fn contains_byte(hay: &[u8], needle: u8) -> bool {
+pub const fn contains_byte(hay: &[u8], needle: u8) -> bool {
     let mut i = 0;
     while i < hay.len() {
         if hay[i] == needle {
@@ -104,7 +104,7 @@ pub fn split_first(input: &[u8]) -> (&[u8], &[u8]) {
 }
 
 /// Convert a byte slice to a &str (unchecked, input is ASCII from our line reader).
-pub fn bytes_to_str(b: &[u8]) -> &str {
+pub const fn bytes_to_str(b: &[u8]) -> &str {
     unsafe { core::str::from_utf8_unchecked(b) }
 }
 

@@ -51,6 +51,7 @@ static FB_CONSOLE: Once<IrqSpinlock<FbConsole>> = Once::new();
 /// Initialize the framebuffer console.
 ///
 /// Must be called after `super::init()` has set up the framebuffer.
+#[allow(clippy::expect_used)] // Init code: framebuffer must exist at this point.
 pub fn init() {
     let fb = FB.get().expect("[fb] framebuffer not initialized");
     let fb_guard = fb.lock();
@@ -59,7 +60,7 @@ pub fn init() {
     clear(&fb_guard, DEFAULT_BG.0, DEFAULT_BG.1, DEFAULT_BG.2);
     drop(fb_guard);
 
-    FB_CONSOLE.call_once(|| {
+    let _ = FB_CONSOLE.call_once(|| {
         IrqSpinlock::new(FbConsole {
             col: 0,
             row: 0,
@@ -199,13 +200,13 @@ fn dispatch_csi(con: &mut FbConsole, fb: &super::FrameBuffer, cmd: u8) {
     }
 }
 
-fn sgr_reset(con: &mut FbConsole) {
+const fn sgr_reset(con: &mut FbConsole) {
     con.fg = DEFAULT_FG;
     con.bg = DEFAULT_BG;
     con.bold = false;
 }
 
-fn apply_sgr(con: &mut FbConsole, param: usize) {
+const fn apply_sgr(con: &mut FbConsole, param: usize) {
     match param {
         0 => sgr_reset(con),
         1 => con.bold = true,
@@ -251,7 +252,7 @@ struct ParamIter<'a> {
 }
 
 impl<'a> ParamIter<'a> {
-    fn new(buf: &'a [u8]) -> Self {
+    const fn new(buf: &'a [u8]) -> Self {
         Self { buf, pos: 0 }
     }
 

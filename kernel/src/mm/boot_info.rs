@@ -99,7 +99,7 @@ impl BootMemoryInfo {
         info
     }
 
-    pub fn usable_regions(&self) -> &[MemoryRegion] {
-        &self.regions[..self.region_count]
+    pub const fn usable_regions(&self) -> &[MemoryRegion] {
+        self.regions.split_at(self.region_count).0
     }
 }

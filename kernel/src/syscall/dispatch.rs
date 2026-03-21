@@ -3,7 +3,7 @@ use alloc::string::String;
 
 use core::sync::atomic::Ordering;
 
-use super::table::*;
+use super::table::{SYS_READ, SYS_WRITE, SYS_OPEN, SYS_CLOSE, SYS_STAT, SYS_BRK, SYS_PIPE, SYS_DUP2, SYS_FORK, SYS_EXECVE, SYS_EXIT, SYS_WAIT4, SYS_MKDIR, SYS_UNLINK, SYS_GETPID, SYS_GETPPID, SYS_GETCWD, SYS_CHDIR, SYS_READDIR, SYS_KILL, SYS_SIGACTION, SYS_SIGPROCMASK};
 use super::traits::{SyscallError, SyscallResult};
 use crate::fs::traits::{DirEntry, FileType, OpenFlags};
 use crate::mm::traits::PageMapper;
@@ -50,7 +50,7 @@ pub fn dispatch(num: usize, args: &[usize; 6]) -> SyscallResult {
 // ---------------------------------------------------------------------------
 
 /// Validate that a user pointer is in user address space.
-fn validate_user_ptr(ptr: usize) -> Result<(), SyscallError> {
+const fn validate_user_ptr(ptr: usize) -> Result<(), SyscallError> {
     if ptr == 0 || ptr >= KERNEL_SPACE_START {
         return Err(SyscallError::InvalidArgument);
     }
@@ -86,7 +86,7 @@ pub fn copy_path_from_user(ptr: usize) -> Result<String, SyscallError> {
 ///
 /// Linux flags: O_RDONLY=0, O_WRONLY=1, O_RDWR=2, O_CREAT=0x40,
 /// O_TRUNC=0x200, O_APPEND=0x400.
-fn linux_flags_to_open_flags(flags: usize) -> OpenFlags {
+const fn linux_flags_to_open_flags(flags: usize) -> OpenFlags {
     let access = flags & 0x3;
     OpenFlags {
         read: access == 0 || access == 2,  // O_RDONLY or O_RDWR
@@ -124,6 +124,7 @@ fn default_stdin_read(ptr: *mut u8, len: usize) -> SyscallResult {
 }
 
 /// Default stdout/stderr: write to serial + framebuffer console.
+#[allow(clippy::unnecessary_wraps)]
 fn default_console_write(ptr: *const u8, len: usize) -> SyscallResult {
     let bytes = unsafe { core::slice::from_raw_parts(ptr, len) };
     if let Ok(s) = core::str::from_utf8(bytes) {
@@ -174,8 +175,9 @@ fn sys_read(args: &[usize; 6]) -> SyscallResult {
             // Default stdio: fd 0 = serial read, fd 1/2 = not readable.
             match fd {
                 0 => default_stdin_read(ptr, len),
-                1 | 2 => Err(SyscallError::InvalidArgument),
-                _ => Err(SyscallError::InvalidArgument), // unreachable: get_kind returns Err
+                // fd 1/2 are not readable; any other fd is unreachable
+                // (get_kind returns Err for unknown fds).
+                _ => Err(SyscallError::InvalidArgument),
             }
         }
     }
@@ -212,7 +214,8 @@ fn sys_write(args: &[usize; 6]) -> SyscallResult {
             // Default stdio: fd 1/2 = console write, fd 0 = not writable.
             match fd {
                 1 | 2 => default_console_write(ptr, len),
-                0 => Err(SyscallError::InvalidArgument),
+                // fd 0 is not writable; any other fd is unreachable
+                // (get_kind returns Err for unknown fds).
                 _ => Err(SyscallError::InvalidArgument),
             }
         }
@@ -242,8 +245,7 @@ fn sys_close(args: &[usize; 6]) -> SyscallResult {
     // Check if this is a default stdio slot (None in the table).
     let kind = crate::sched::with_current_fd_table(|fdt| fdt.get_kind(fd));
     match kind {
-        Ok(None) => return Ok(0), // closing default stdio is a no-op
-        Err(_) => return Ok(0),   // already closed or out of range
+        Ok(None) | Err(_) => return Ok(0), // closing default stdio or already closed
         Ok(Some(_)) => {}         // has a real entry — close it below
     }
 
@@ -511,7 +513,7 @@ fn sys_getpid() -> SyscallResult {
 // ---------------------------------------------------------------------------
 
 fn sys_getppid() -> SyscallResult {
-    crate::sched::with_current_task(|task| Ok(task.parent.map(|p| p.0 as usize).unwrap_or(0)))
+    crate::sched::with_current_task(|task| Ok(task.parent.map_or(0, |p| p.0 as usize)))
 }
 
 // ---------------------------------------------------------------------------
@@ -677,7 +679,7 @@ fn sys_sigaction(args: &[usize; 6]) -> SyscallResult {
             (*dst).handler = handler;
             (*dst).flags = 0;
             (*dst).mask = mask;
-            (*dst)._pad = 0;
+            (*dst).pad = 0;
         }
     }
 

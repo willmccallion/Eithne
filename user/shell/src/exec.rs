@@ -1,6 +1,8 @@
-use crate::io::*;
-use crate::path::*;
-use crate::syscall::*;
+use core::cmp::Ordering;
+
+use crate::io::{println, print_error, print, print_isize};
+use crate::path::{split_first, resolve_path, bytes_to_str};
+use crate::syscall::{sys_fork, SigActionUser, SIG_DFL, sys_sigaction, SIGINT, sys_exec, sys_exit, sys_waitpid};
 
 // ---------------------------------------------------------------------------
 // Wait status macros (standard Unix encoding)
@@ -13,22 +15,22 @@ const WAIT_STATUS_CODE_SHIFT: i32 = 8;
 const WAIT_STATUS_CODE_MASK: i32 = 0xFF;
 
 /// True if the child exited normally (not killed by a signal).
-pub fn wifexited(status: i32) -> bool {
+pub const fn wifexited(status: i32) -> bool {
     (status & WAIT_STATUS_SIGNAL_MASK) == 0
 }
 
 /// Extract the exit code from a normal-exit wait status.
-pub fn wexitstatus(status: i32) -> i32 {
+pub const fn wexitstatus(status: i32) -> i32 {
     (status >> WAIT_STATUS_CODE_SHIFT) & WAIT_STATUS_CODE_MASK
 }
 
 /// Returns true if the child was killed by a signal.
-pub fn wifsignaled(status: i32) -> bool {
+pub const fn wifsignaled(status: i32) -> bool {
     (status & WAIT_STATUS_SIGNAL_MASK) != 0
 }
 
 /// Extract the signal number from a signal-killed wait status.
-pub fn wtermsig(status: i32) -> i32 {
+pub const fn wtermsig(status: i32) -> i32 {
     status & WAIT_STATUS_SIGNAL_MASK
 }
 
@@ -115,55 +117,58 @@ pub fn cmd_run(args: &[u8], cwd: &[u8]) {
     let path = bytes_to_str(&resolved[..rlen]);
 
     let pid = sys_fork();
-    if pid == 0 {
-        // Child: reset SIGINT to default (shell had SIG_IGN).
-        let dfl_act = SigActionUser {
-            handler: SIG_DFL,
-            flags: 0,
-            mask: 0,
-            _pad: 0,
-        };
-        sys_sigaction(SIGINT, &dfl_act as *const SigActionUser as usize, 0);
+    match pid.cmp(&0) {
+        Ordering::Equal => {
+            // Child: reset SIGINT to default (shell had SIG_IGN).
+            let dfl_act = SigActionUser {
+                handler: SIG_DFL,
+                flags: 0,
+                mask: 0,
+                _pad: 0,
+            };
+            let _ = sys_sigaction(SIGINT, &dfl_act as *const SigActionUser as usize, 0);
 
-        // Build argv: [path, arg1, arg2, ..., NULL]
-        let argv_ptr = build_argv(path.as_bytes(), rest);
+            // Build argv: [path, arg1, arg2, ..., NULL]
+            let argv_ptr = build_argv(path.as_bytes(), rest);
 
-        // Replace with the new program.
-        let ret = sys_exec(path, argv_ptr);
-        // exec only returns on failure.
-        print_error("exec", ret);
-        sys_exit(EXEC_FAILURE_EXIT_CODE);
-    } else if pid > 0 {
-        // Parent: wait for child, retrying on EINTR.
-        let mut status: i32 = 0;
-        loop {
-            let ret = sys_waitpid(pid as usize, &mut status);
-            if ret == -4_isize {
-                // EINTR — interrupted by signal, retry.
-                continue;
-            }
-            if ret < 0 {
-                print_error("waitpid", ret);
-            } else if wifsignaled(status) {
-                let sig = wtermsig(status);
-                if sig == SIGINT as i32 {
-                    print("\n"); // newline after ^C
-                } else {
-                    print("killed by signal ");
-                    print_isize(sig as isize);
-                    print("\n");
-                }
-            } else if wifexited(status) {
-                let code = wexitstatus(status);
-                if code != 0 {
-                    print("child exited with code ");
-                    print_isize(code as isize);
-                    print("\n");
-                }
-            }
-            break;
+            // Replace with the new program.
+            let ret = sys_exec(path, argv_ptr);
+            // exec only returns on failure.
+            print_error("exec", ret);
+            sys_exit(EXEC_FAILURE_EXIT_CODE);
         }
-    } else {
-        print_error("fork", pid);
+        Ordering::Greater => {
+            // Parent: wait for child, retrying on EINTR.
+            let mut status: i32 = 0;
+            loop {
+                let ret = sys_waitpid(pid as usize, &mut status);
+                if ret == -4_isize {
+                    // EINTR — interrupted by signal, retry.
+                    continue;
+                }
+                if ret < 0 {
+                    print_error("waitpid", ret);
+                } else if wifsignaled(status) {
+                    let sig = wtermsig(status);
+                    if sig == SIGINT as i32 {
+                        // newline after ^C
+                    } else {
+                        print("killed by signal ");
+                        print_isize(sig as isize);
+                    }
+                } else if wifexited(status) {
+                    let code = wexitstatus(status);
+                    if code != 0 {
+                        print("child exited with code ");
+                        print_isize(code as isize);
+                    }
+                }
+                print("\n");
+                break;
+            }
+        }
+        Ordering::Less => {
+            print_error("fork", pid);
+        }
     }
 }

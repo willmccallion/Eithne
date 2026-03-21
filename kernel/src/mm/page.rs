@@ -11,12 +11,14 @@ pub const LARGE_PAGE_SIZE: usize = 2 * 1024 * 1024;
 pub const MAX_ORDER: usize = 11;
 
 /// Convert a buddy order to its page count (2^order).
+#[allow(clippy::inline_always)]
 #[inline(always)]
 pub const fn order_to_pages(order: usize) -> usize {
     1 << order
 }
 
 /// Convert a buddy order to its byte size.
+#[allow(clippy::inline_always)]
 #[inline(always)]
 pub const fn order_to_bytes(order: usize) -> usize {
     PAGE_SIZE << order

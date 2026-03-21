@@ -70,7 +70,7 @@ const USER_STACK_OFFSET: u64 = 0x7FFF_0000;
 /// Creates a fresh address space with kernel mappings copied, finds a free
 /// PML4 slot, and maps all PT_LOAD segments with an offset to avoid conflicts
 /// with the kernel identity map.
-pub fn load_elf(elf: &Elf64Info) -> Result<LoadedElf, ElfLoadError> {
+pub fn load_elf(elf: &Elf64Info<'_>) -> Result<LoadedElf, ElfLoadError> {
     let mut aspace = KernelAddressSpace::new_with_kernel_mappings().map_err(ElfLoadError::Map)?;
 
     let user_base = aspace
@@ -124,7 +124,7 @@ pub fn load_elf(elf: &Elf64Info) -> Result<LoadedElf, ElfLoadError> {
 /// Map a single PT_LOAD segment into the address space.
 fn map_segment(
     aspace: &mut KernelAddressSpace,
-    elf: &Elf64Info,
+    elf: &Elf64Info<'_>,
     phdr: &Elf64Phdr,
     reloc_offset: u64,
 ) -> Result<(), ElfLoadError> {
@@ -211,12 +211,11 @@ fn map_segment(
 /// For ET_EXEC binaries with no relocations, this is a no-op.
 fn apply_relocations(
     aspace: &KernelAddressSpace,
-    elf: &Elf64Info,
+    elf: &Elf64Info<'_>,
     reloc_offset: u64,
 ) -> Result<(), ElfLoadError> {
-    let rela_entries = match elf.rela_entries() {
-        Some(entries) => entries,
-        None => return Ok(()), // No relocations — backwards compat with ET_EXEC
+    let Some(rela_entries) = elf.rela_entries() else {
+        return Ok(()); // No relocations — backwards compat with ET_EXEC
     };
 
     for rela in rela_entries {
@@ -254,8 +253,8 @@ fn write_to_user(aspace: &KernelAddressSpace, vaddr: u64, value: u64) -> Result<
     Ok(())
 }
 
-/// Convert ELF p_flags to kernel PageFlags.
-fn phdr_flags(phdr: &Elf64Phdr) -> PageFlags {
+/// Convert ELF p_flags to kernel `PageFlags`.
+const fn phdr_flags(phdr: &Elf64Phdr) -> PageFlags {
     PageFlags {
         readable: true,
         writable: phdr.p_flags & PF_W != 0,

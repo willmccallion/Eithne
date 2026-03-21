@@ -1,3 +1,4 @@
+//! eithne UEFI kernel.
 #![no_std]
 #![no_main]
 #![allow(dead_code, unused_imports)]
@@ -33,15 +34,23 @@ struct InitRamfs {
 ///
 /// Contains only plain scalar values — no UEFI pointers — so it survives
 /// after boot services are torn down.
+#[derive(Debug)]
 pub struct FrameBufferInfo {
+    /// Framebuffer base address.
     pub base: u64,
+    /// Size in bytes.
     pub size: usize,
+    /// Width in pixels.
     pub width: usize,
+    /// Height in pixels.
     pub height: usize,
+    /// Stride in pixels.
     pub stride: usize,
+    /// Whether pixel format is BGR.
     pub is_bgr: bool,
 }
 
+#[allow(clippy::expect_used)] // Boot-time entry point: panicking is appropriate for fatal init failures.
 #[entry]
 fn efi_main() -> Status {
     arch::early_init();
@@ -60,7 +69,7 @@ fn efi_main() -> Status {
 
     let boot_info = mm::boot_info::BootMemoryInfo::from_uefi_mmap(&mmap);
 
-    kernel_main(boot_info, initramfs, fb_info);
+    kernel_main(&boot_info, initramfs.as_ref(), fb_info.as_ref());
 
     Status::SUCCESS
 }
@@ -111,7 +120,11 @@ fn capture_gop_info() -> Option<FrameBufferInfo> {
 }
 
 /// Load `\EFI\eithne\init` from the ESP into a LOADER_DATA pool allocation.
+#[allow(clippy::expect_used)] // Boot-time: panicking is appropriate if ESP is unreadable.
 fn load_init_from_esp() -> Option<InitRamfs> {
+    #[repr(align(8))]
+    struct AlignedBuf([u8; 256]);
+
     let mut sfs = boot::get_image_file_system(boot::image_handle())
         .expect("[initramfs] failed to open ESP filesystem");
 
@@ -127,8 +140,6 @@ fn load_init_from_esp() -> Option<InitRamfs> {
         .expect("[initramfs] init is not a regular file");
 
     // Query file size.
-    #[repr(align(8))]
-    struct AlignedBuf([u8; 256]);
     let mut info_buf = AlignedBuf([0u8; 256]);
     let info = file
         .get_info::<FileInfo>(&mut info_buf.0)
@@ -161,19 +172,19 @@ fn load_init_from_esp() -> Option<InitRamfs> {
 }
 
 fn kernel_main(
-    boot_info: mm::boot_info::BootMemoryInfo,
-    initramfs: Option<InitRamfs>,
-    fb_info: Option<FrameBufferInfo>,
+    boot_info: &mm::boot_info::BootMemoryInfo,
+    initramfs: Option<&InitRamfs>,
+    fb_info: Option<&FrameBufferInfo>,
 ) {
     println!("[eithne] entering kernel_main");
 
     // 1. Memory management (frame allocator + heap).
-    mm::init(&boot_info);
+    mm::init(boot_info);
 
     // 2. Higher-half direct map: all physical memory at KERNEL_VIRT_BASE.
     //    Must happen before init_interrupts so GDT/IDT pointers are stable.
     //    Extend to cover the GOP framebuffer which may be at a high physical address.
-    let max_phys = if let Some(ref fb) = fb_info {
+    let max_phys = if let Some(fb) = fb_info {
         boot_info
             .max_phys_addr
             .as_u64()
@@ -212,7 +223,7 @@ fn kernel_main(
 
     // 8. Store init binary in VFS so `exec("/bin/shell")` works.
     #[cfg(target_arch = "x86_64")]
-    if let Some(ref ramfs) = initramfs {
+    if let Some(ramfs) = initramfs {
         let phys_addr = ramfs.ptr.as_ptr() as u64;
         let virt_ptr = mm::addr::phys_to_virt(mm::addr::PhysAddr::new(phys_addr));
         let elf_data = unsafe { core::slice::from_raw_parts(virt_ptr.as_ptr::<u8>(), ramfs.len) };
@@ -228,15 +239,15 @@ fn kernel_main(
     // 11. Signal subsystem.
     ipc::signal::init();
 
-    sched::spawn("idle", idle_task);
+    let _ = sched::spawn("idle", idle_task);
 
     // 11. User-mode init process from ELF.
     #[cfg(target_arch = "x86_64")]
-    if let Some(ref ramfs) = initramfs {
+    if let Some(ramfs) = initramfs {
         let phys_addr = ramfs.ptr.as_ptr() as u64;
         let virt_ptr = mm::addr::phys_to_virt(mm::addr::PhysAddr::new(phys_addr));
         let elf_data = unsafe { core::slice::from_raw_parts(virt_ptr.as_ptr::<u8>(), ramfs.len) };
-        sched::spawn_user_from_elf(elf_data);
+        let _ = sched::spawn_user_from_elf(elf_data);
     }
 
     println!("[eithne] initialization complete - entering scheduler loop.");
@@ -254,7 +265,7 @@ fn store_init_in_vfs(elf_data: &[u8]) {
     use fs::traits::OpenFlags;
 
     // Create standard Unix directory hierarchy.
-    for dir in &["/bin", "/dev", "/etc", "/home", "/tmp", "/var"] {
+    for dir in ["/bin", "/dev", "/etc", "/home", "/tmp", "/var"] {
         if let Err(e) = fs::vfs::mkdir(dir) {
             println!("[init] warning: mkdir {} failed: {:?}", dir, e);
         }

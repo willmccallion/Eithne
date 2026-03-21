@@ -76,51 +76,52 @@ struct Chunk {
     size: usize,
 }
 
+#[allow(clippy::cast_ptr_alignment)]
 impl Chunk {
     #[inline]
-    fn chunk_size(&self) -> usize {
+    const fn chunk_size(&self) -> usize {
         self.size & SIZE_MASK
     }
 
     #[inline]
-    fn is_in_use(&self) -> bool {
+    const fn is_in_use(&self) -> bool {
         self.size & THIS_IN_USE != 0
     }
 
     #[inline]
-    fn prev_in_use(&self) -> bool {
+    const fn prev_in_use(&self) -> bool {
         self.size & PREV_IN_USE != 0
     }
 
     #[inline]
-    fn payload(&self) -> *mut u8 {
+    const fn payload(&self) -> *mut u8 {
         unsafe { (self as *const Self as *mut u8).add(CHUNK_OVERHEAD) }
     }
 
     #[inline]
-    unsafe fn from_payload(ptr: *mut u8) -> *mut Chunk {
-        unsafe { ptr.sub(CHUNK_OVERHEAD) as *mut Chunk }
+    const unsafe fn from_payload(ptr: *mut u8) -> *mut Self {
+        unsafe { ptr.sub(CHUNK_OVERHEAD) as *mut Self }
     }
 
     #[inline]
-    unsafe fn next_chunk(&self) -> *mut Chunk {
+    const unsafe fn next_chunk(&self) -> *mut Self {
         unsafe {
             let base = self as *const Self as *const u8;
-            base.add(self.chunk_size()) as *mut Chunk
+            base.add(self.chunk_size()) as *mut Self
         }
     }
 
     #[inline]
-    unsafe fn prev_chunk(&self) -> *mut Chunk {
+    const unsafe fn prev_chunk(&self) -> *mut Self {
         unsafe {
             let base = self as *const Self as *const u8;
             let prev_size = self.prev_size();
-            base.sub(prev_size) as *mut Chunk
+            base.sub(prev_size) as *mut Self
         }
     }
 
     #[inline]
-    unsafe fn prev_size(&self) -> usize {
+    const unsafe fn prev_size(&self) -> usize {
         unsafe {
             let ptr = (self as *const Self as *const usize).sub(1);
             *ptr
@@ -140,23 +141,23 @@ impl Chunk {
     }
 
     #[inline]
-    unsafe fn fd(&self) -> *mut Chunk {
-        unsafe { *(self.payload() as *const *mut Chunk) }
+    const unsafe fn fd(&self) -> *mut Self {
+        unsafe { *(self.payload() as *const *mut Self) }
     }
 
     #[inline]
-    unsafe fn bk(&self) -> *mut Chunk {
-        unsafe { *((self.payload() as *const *mut Chunk).add(1)) }
+    const unsafe fn bk(&self) -> *mut Self {
+        unsafe { *((self.payload() as *const *mut Self).add(1)) }
     }
 
     #[inline]
-    unsafe fn set_fd(&mut self, fd: *mut Chunk) {
-        unsafe { *(self.payload() as *mut *mut Chunk) = fd }
+    unsafe fn set_fd(&mut self, fd: *mut Self) {
+        unsafe { *(self.payload() as *mut *mut Self) = fd }
     }
 
     #[inline]
-    unsafe fn set_bk(&mut self, bk: *mut Chunk) {
-        unsafe { *((self.payload() as *mut *mut Chunk).add(1)) = bk }
+    unsafe fn set_bk(&mut self, bk: *mut Self) {
+        unsafe { *((self.payload() as *mut *mut Self).add(1)) = bk }
     }
 }
 
@@ -181,19 +182,19 @@ impl BinHead {
         }
     }
 
-    unsafe fn init(&mut self) {
-        let self_as_chunk = self as *mut BinHead as *mut Chunk;
+    const unsafe fn init(&mut self) {
+        let self_as_chunk = self as *mut Self as *mut Chunk;
         self.fd = self_as_chunk;
         self.bk = self_as_chunk;
     }
 
     unsafe fn is_empty(&self) -> bool {
-        let self_as_chunk = self as *const BinHead as *const Chunk;
-        core::ptr::eq(self.fd as *const Chunk, self_as_chunk)
+        let self_as_chunk = self as *const Self as *const Chunk;
+        core::ptr::eq(self.fd.cast_const(), self_as_chunk)
     }
 
-    fn as_chunk_ptr(&mut self) -> *mut Chunk {
-        self as *mut BinHead as *mut Chunk
+    const fn as_chunk_ptr(&mut self) -> *mut Chunk {
+        self as *mut Self as *mut Chunk
     }
 }
 
@@ -211,6 +212,7 @@ struct DlMallocState {
     initialized: bool,
 }
 
+#[allow(clippy::cast_ptr_alignment)]
 impl DlMallocState {
     const fn new() -> Self {
         Self {
@@ -227,7 +229,7 @@ impl DlMallocState {
         if self.initialized {
             return;
         }
-        for bin in self.bins.iter_mut() {
+        for bin in &mut self.bins {
             unsafe { bin.init() };
         }
         self.initialized = true;
@@ -238,12 +240,12 @@ impl DlMallocState {
     // -----------------------------------------------------------------------
 
     #[inline]
-    fn small_index(size: usize) -> usize {
+    const fn small_index(size: usize) -> usize {
         (size / ALIGNMENT) - 2
     }
 
     #[inline]
-    fn large_index(size: usize) -> usize {
+    const fn large_index(size: usize) -> usize {
         let mut idx = 0usize;
         let mut s = size >> 8;
         while s > 1 && idx < NLARGEBINS - 1 {
@@ -576,6 +578,7 @@ pub struct DlMalloc {
 }
 
 // SAFETY: eithne user processes are currently single-threaded.
+#[allow(clippy::non_send_fields_in_send_ty)]
 unsafe impl Send for DlMalloc {}
 unsafe impl Sync for DlMalloc {}
 

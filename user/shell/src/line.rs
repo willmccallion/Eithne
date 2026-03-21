@@ -1,6 +1,6 @@
 use crate::dispatch::print_prompt;
-use crate::io::*;
-use crate::syscall::*;
+use crate::io::{LINE_MAX, STDIN, print, print_bytes, COMMANDS};
+use crate::syscall::sys_read;
 
 /// Negative errno returned by sys_read when interrupted by a signal.
 const NEG_EINTR: isize = -4;

@@ -68,11 +68,12 @@ impl TaskStack {
     pub const STACK_PAGES: usize = 16;
 
     pub fn new_for_fn(entry_fn: fn() -> !) -> Option<Self> {
+        use crate::mm::page::pages_to_order;
+
         // KERNEL_CS is only defined for x86_64; on other archs the scheduler
         // stubs don't use this path.
         #[cfg(target_arch = "x86_64")]
-        let kernel_cs: u16 = 0x08; // matches gdt::KERNEL_CS
-        use crate::mm::page::pages_to_order;
+        let kernel_cs: u64 = 0x08; // matches gdt::KERNEL_CS
         let pages = Self::STACK_PAGES;
         let phys = frame::alloc_pages(pages_to_order(pages))?;
         let base = VirtAddr::new(crate::mm::addr::phys_to_virt(phys).as_u64());
@@ -99,7 +100,7 @@ impl TaskStack {
                 vector: 0xFF,
                 error_code: 0,
                 rip: entry_fn as usize as u64,
-                cs: kernel_cs as u64,
+                cs: kernel_cs,
                 rflags: RFLAGS_KERNEL_IF,
                 rsp: top.as_u64(),
                 ss: 0,
@@ -118,7 +119,7 @@ impl TaskStack {
     ///
     /// Used by user-mode task creation, which allocates and initialises the
     /// stack itself.  `from_raw` does NOT write an InterruptFrame.
-    pub fn from_raw(base: VirtAddr, pages: usize) -> Self {
+    pub const fn from_raw(base: VirtAddr, pages: usize) -> Self {
         let top = base.offset((pages * PAGE_SIZE) as u64);
         Self {
             base,
@@ -132,8 +133,9 @@ impl TaskStack {
 
 impl Drop for TaskStack {
     fn drop(&mut self) {
+        use crate::mm::page::pages_to_order;
+
         if self.owns_frames {
-            use crate::mm::page::pages_to_order;
             let phys = virt_to_phys(self.base);
             frame::dealloc_pages(phys, pages_to_order(self.pages));
         }

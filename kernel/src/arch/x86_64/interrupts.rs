@@ -145,7 +145,7 @@ pub fn mask_irq(irq: u8) {
 pub fn irq_handler(irq: u8, _frame: &InterruptFrame) {
     match irq {
         IRQ_TIMER => {
-            TIMER_TICKS.fetch_add(1, Ordering::Relaxed);
+            let _ = TIMER_TICKS.fetch_add(1, Ordering::Relaxed);
             // Signal the scheduler; the actual switch happens in check_resched
             // at the isr_common exit path, after the full InterruptFrame is on
             // the stack and the Rust handler has returned.

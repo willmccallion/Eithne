@@ -1,10 +1,12 @@
-use crate::builtins::*;
-use crate::exec::*;
-use crate::io::*;
-use crate::path::*;
-use crate::pipeline::*;
-use crate::redirect::*;
-use crate::syscall::*;
+use core::cmp::Ordering;
+
+use crate::builtins::{cmd_alloc, cmd_help, cmd_echo, cmd_ls, cmd_cat, cmd_write, cmd_mkdir, cmd_rm, cmd_stat, cmd_cd, cmd_pwd, cmd_clear, cmd_exit, cmd_kill};
+use crate::exec::cmd_run;
+use crate::io::{print, CLR_CYAN, CLR_RESET, CLR_BLUE, print_bytes, CLR_GREEN, LINE_MAX, print_error, CLR_RED};
+use crate::path::{contains_byte, split_first};
+use crate::pipeline::{cmd_pipeline, run_pipeline_stage};
+use crate::redirect::{has_redirects, parse_redirects, apply_redirects};
+use crate::syscall::{sys_fork, SigActionUser, SIG_DFL, sys_sigaction, SIGINT, sys_exit, sys_waitpid};
 
 pub fn print_prompt(cwd: &[u8]) {
     print(CLR_CYAN);
@@ -40,37 +42,41 @@ pub fn dispatch_command(input: &[u8], cwd: &mut [u8; 256], cwd_len: &mut usize) 
         }
 
         let pid = sys_fork();
-        if pid == 0 {
-            // Child: apply redirections.
-            let dfl_act = SigActionUser {
-                handler: SIG_DFL,
-                flags: 0,
-                mask: 0,
-                _pad: 0,
-            };
-            sys_sigaction(SIGINT, &dfl_act as *const SigActionUser as usize, 0);
+        match pid.cmp(&0) {
+            Ordering::Equal => {
+                // Child: apply redirections.
+                let dfl_act = SigActionUser {
+                    handler: SIG_DFL,
+                    flags: 0,
+                    mask: 0,
+                    _pad: 0,
+                };
+                let _ = sys_sigaction(SIGINT, &dfl_act as *const SigActionUser as usize, 0);
 
-            if !apply_redirects(&redir, &cwd[..*cwd_len]) {
-                sys_exit(1);
-            }
-            // Run the command in the child.
-            run_pipeline_stage(clean, &cwd[..*cwd_len]);
-            sys_exit(0);
-        } else if pid > 0 {
-            // Parent: wait for child.
-            let mut status: i32 = 0;
-            loop {
-                let ret = sys_waitpid(pid as usize, &mut status);
-                if ret == -4_isize {
-                    continue; // EINTR
+                if !apply_redirects(&redir, &cwd[..*cwd_len]) {
+                    sys_exit(1);
                 }
-                if ret < 0 {
-                    print_error("waitpid", ret);
-                }
-                break;
+                // Run the command in the child.
+                run_pipeline_stage(clean, &cwd[..*cwd_len]);
+                sys_exit(0);
             }
-        } else {
-            print_error("fork", pid);
+            Ordering::Greater => {
+                // Parent: wait for child.
+                let mut status: i32 = 0;
+                loop {
+                    let ret = sys_waitpid(pid as usize, &mut status);
+                    if ret == -4_isize {
+                        continue; // EINTR
+                    }
+                    if ret < 0 {
+                        print_error("waitpid", ret);
+                    }
+                    break;
+                }
+            }
+            Ordering::Less => {
+                print_error("fork", pid);
+            }
         }
         return;
     }

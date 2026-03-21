@@ -1,4 +1,4 @@
-use crate::syscall::*;
+use crate::syscall::sys_write;
 
 pub const LINE_MAX: usize = 256;
 pub const STDOUT: usize = 1;
@@ -18,11 +18,11 @@ pub const COMMANDS: &[&[u8]] = &[
 ];
 
 pub fn print(s: &str) {
-    sys_write(STDOUT, s.as_bytes());
+    let _ = sys_write(STDOUT, s.as_bytes());
 }
 
 pub fn print_bytes(b: &[u8]) {
-    sys_write(STDOUT, b);
+    let _ = sys_write(STDOUT, b);
 }
 
 pub fn println(s: &str) {

@@ -2,6 +2,15 @@
 name = "eithne"
 version = "0.1.0"
 edition = "2024"
+description = "eithne UEFI kernel"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/willmccallion/eithne"
+readme = "../README.md"
+keywords = ["kernel", "uefi", "os"]
+categories = ["os", "no-std"]
 
 [dependencies]
 uefi = "0.34"
+
+[lints]
+workspace = true

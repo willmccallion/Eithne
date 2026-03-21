@@ -1,7 +1,7 @@
+//! eithne user-space shell.
+
 #![no_std]
 #![no_main]
-
-extern crate alloc;
 
 mod builtins;
 mod dispatch;
@@ -15,9 +15,9 @@ mod redirect;
 mod syscall;
 
 use dispatch::{dispatch_command, print_prompt};
-use io::*;
+use io::{print, CLR_CYAN, CLR_RESET, LINE_MAX};
 use line::read_line;
-use syscall::*;
+use syscall::{SigActionUser, SIG_IGN, sys_sigaction, SIGINT, SIGPIPE, sys_exit};
 
 // ---------------------------------------------------------------------------
 // Entry point
@@ -38,9 +38,9 @@ extern "C" fn main(_argc: usize, _argv: *const *const u8) -> ! {
         mask: 0,
         _pad: 0,
     };
-    sys_sigaction(SIGINT, &ign_act as *const SigActionUser as usize, 0);
+    let _ = sys_sigaction(SIGINT, &ign_act as *const SigActionUser as usize, 0);
     // Also ignore SIGPIPE for the shell itself.
-    sys_sigaction(SIGPIPE, &ign_act as *const SigActionUser as usize, 0);
+    let _ = sys_sigaction(SIGPIPE, &ign_act as *const SigActionUser as usize, 0);
 
     print(CLR_CYAN);
     print("eithne");
@@ -64,7 +64,7 @@ extern "C" fn main(_argc: usize, _argv: *const *const u8) -> ! {
 }
 
 #[panic_handler]
-fn panic(_info: &core::panic::PanicInfo) -> ! {
+fn panic(_info: &core::panic::PanicInfo<'_>) -> ! {
     print("panic!\n");
     sys_exit(1);
 }

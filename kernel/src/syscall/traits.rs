@@ -24,14 +24,14 @@ pub enum SyscallError {
 impl From<FsError> for SyscallError {
     fn from(e: FsError) -> Self {
         match e {
-            FsError::NotFound => SyscallError::NotFound,
-            FsError::PermissionDenied => SyscallError::PermissionDenied,
-            FsError::AlreadyExists => SyscallError::AlreadyExists,
-            FsError::NotADirectory => SyscallError::NotADirectory,
-            FsError::IsADirectory => SyscallError::IsADirectory,
-            FsError::IoError => SyscallError::IoError,
-            FsError::NoSpace => SyscallError::NoMemory,
-            FsError::InvalidPath => SyscallError::InvalidArgument,
+            FsError::NotFound => Self::NotFound,
+            FsError::PermissionDenied => Self::PermissionDenied,
+            FsError::AlreadyExists => Self::AlreadyExists,
+            FsError::NotADirectory => Self::NotADirectory,
+            FsError::IsADirectory => Self::IsADirectory,
+            FsError::IoError => Self::IoError,
+            FsError::NoSpace => Self::NoMemory,
+            FsError::InvalidPath => Self::InvalidArgument,
         }
     }
 }

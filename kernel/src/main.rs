@@ -181,47 +181,53 @@ fn kernel_main(
     // 1. Memory management (frame allocator + heap).
     mm::init(boot_info);
 
-    // 2. Higher-half direct map: all physical memory at KERNEL_VIRT_BASE.
+    // 2. PCI bus enumeration (I/O ports only — no MMIO yet).
+    //    Must happen before init_higher_half so we know the max BAR address
+    //    and can map enough physical address space for PCI MMIO regions.
+    drivers::pci::init();
+
+    // 3. Higher-half direct map: all physical memory at KERNEL_VIRT_BASE.
     //    Must happen before init_interrupts so GDT/IDT pointers are stable.
-    //    Extend to cover the GOP framebuffer which may be at a high physical address.
-    let max_phys = if let Some(fb) = fb_info {
-        boot_info
-            .max_phys_addr
-            .as_u64()
-            .max(fb.base + fb.size as u64)
-    } else {
-        boot_info.max_phys_addr.as_u64()
-    };
+    //    Cover RAM, GOP framebuffer, and PCI MMIO BARs (which OVMF may
+    //    place above 4 GiB for 64-bit BARs).
+    let mut max_phys = boot_info.max_phys_addr.as_u64();
+    if let Some(fb) = fb_info {
+        max_phys = max_phys.max(fb.base + fb.size as u64);
+    }
+    max_phys = max_phys.max(drivers::pci::max_bar_address());
     arch::init_higher_half(max_phys);
     mm::set_higher_half_offset(crate::mm::layout::KERNEL_VIRT_BASE);
 
-    // 2.5. Snapshot boot page table before any user processes.
+    // 3.5. Snapshot boot page table before any user processes.
     arch::save_boot_mappings();
 
-    // 3. GDT, IDT, PIC, interrupts.
+    // 4. GDT, IDT, PIC, interrupts.
     arch::init_interrupts();
 
-    // 4. Page table smoke test.
+    // 5. Page table smoke test.
     arch::test_paging();
 
-    // 5. Syscall interface.
+    // 6. Syscall interface.
     arch::init_syscalls();
 
-    // 5.5. Virtual filesystem (ramfs root).
+    // 6.5. Virtual filesystem (ramfs root).
     fs::init();
 
-    // 6. Serial input buffer + COM1 RX interrupts.
+    // 7. Serial input buffer + COM1 RX interrupts.
     drivers::serial::init();
     arch::enable_serial_rx();
 
-    // 7. Framebuffer console (if GOP was available).
+    // 7.5. Block device drivers (needs PCI + higher-half for MMIO).
+    drivers::block::init();
+
+    // 8. Framebuffer console (if GOP was available).
     if let Some(fb) = fb_info {
         drivers::fb::init(fb);
         drivers::fb::console::init();
         println!("[fb] framebuffer console initialized");
     }
 
-    // 8. Store init binary in VFS so `exec("/bin/shell")` works.
+    // 9. Store init binary in VFS so `exec("/bin/shell")` works.
     #[cfg(target_arch = "x86_64")]
     if let Some(ramfs) = initramfs {
         let phys_addr = ramfs.ptr.as_ptr() as u64;
@@ -230,18 +236,18 @@ fn kernel_main(
         store_init_in_vfs(elf_data);
     }
 
-    // 9. Scheduler.
+    // 10. Scheduler.
     sched::init();
 
-    // 10. Pipe subsystem.
+    // 11. Pipe subsystem.
     ipc::pipe::init();
 
-    // 11. Signal subsystem.
+    // 12. Signal subsystem.
     ipc::signal::init();
 
     let _ = sched::spawn("idle", idle_task);
 
-    // 11. User-mode init process from ELF.
+    // 13. User-mode init process from ELF.
     #[cfg(target_arch = "x86_64")]
     if let Some(ramfs) = initramfs {
         let phys_addr = ramfs.ptr.as_ptr() as u64;

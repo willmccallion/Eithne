@@ -11,7 +11,7 @@ pub enum IoError {
 /// Base trait for all device drivers.
 pub trait Driver {
     /// Human-readable driver name.
-    fn name(&self) -> &str;
+    fn name(&self) -> &'static str;
 
     /// Initialize the device. Called once during boot.
     fn init(&mut self) -> Result<(), IoError>;

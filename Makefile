@@ -28,7 +28,7 @@ QEMU_ECHR     := 0x02
 ifeq ($(ARCH),x86_64)
   UEFI_TARGET := x86_64-unknown-uefi
   USER_TARGET := x86_64-unknown-none
-  OVMF        := /usr/share/edk2/x64/OVMF.4m.fd
+  OVMF        ?= $(or $(OVMF_X64),/usr/share/edk2/x64/OVMF.4m.fd)
   QEMU        := qemu-system-x86_64
   BOOT_FILE   := BOOTX64.EFI
   QEMU_EXTRA  :=
@@ -47,6 +47,10 @@ endif
 # ---------------------------------------------------------------------------
 
 BUILD_DIR     := target
+
+# Virtio block disk image
+DISK_IMG      := $(BUILD_DIR)/disk.img
+DISK_SIZE_MB  := 64
 ESP_DIR       := $(BUILD_DIR)/esp
 EFI_BINARY    := $(BUILD_DIR)/$(UEFI_TARGET)/release/eithne.efi
 
@@ -62,7 +66,7 @@ ESP_APP_DIR   := $(ESP_DIR)/EFI/eithne
 # Phony targets
 # ---------------------------------------------------------------------------
 
-.PHONY: all kernel user esp run run-gui clippy check clean rebuild
+.PHONY: all kernel user esp disk run run-gui clippy check clean rebuild
 
 all: esp
 
@@ -72,19 +76,23 @@ user: $(USER_INIT_ELF)
 
 esp: $(ESP_BOOT_DIR)/$(BOOT_FILE) $(ESP_APP_DIR)/init
 
-run: esp
+disk: $(DISK_IMG)
+
+run: esp $(DISK_IMG)
 	@echo "==> Launching QEMU ($(ARCH)) - serial only..."
 	@echo "    Press Ctrl-B X to exit QEMU"
 	@echo ""
 	$(QEMU) \
 		-bios $(OVMF) \
 		-drive format=raw,file=fat:rw:$(ESP_DIR) \
+		-drive file=$(DISK_IMG),format=raw,if=none,id=disk0 \
+		-device virtio-blk-pci,drive=disk0 \
 		-net none \
 		-nographic \
 		-echr $(QEMU_ECHR) \
 		$(QEMU_EXTRA)
 
-run-gui: esp
+run-gui: esp $(DISK_IMG)
 	@echo "==> Launching QEMU ($(ARCH)) - GUI + serial..."
 	@echo "    QEMU window: framebuffer output"
 	@echo "    Terminal:     serial I/O"
@@ -93,6 +101,8 @@ run-gui: esp
 	$(QEMU) \
 		-bios $(OVMF) \
 		-drive format=raw,file=fat:rw:$(ESP_DIR) \
+		-drive file=$(DISK_IMG),format=raw,if=none,id=disk0 \
+		-device virtio-blk-pci,drive=disk0 \
 		-net none \
 		-serial stdio \
 		-vga std \
@@ -135,6 +145,14 @@ $(ESP_APP_DIR)/init: FORCE $(USER_INIT_ELF) | $(ESP_APP_DIR)
 
 # Directory creation
 $(ESP_BOOT_DIR) $(ESP_APP_DIR):
+	mkdir -p $@
+
+# Disk image for virtio-blk (created once, reused across runs).
+$(DISK_IMG): | $(BUILD_DIR)
+	@echo "==> Creating $(DISK_SIZE_MB) MiB disk image..."
+	dd if=/dev/zero of=$@ bs=1M count=$(DISK_SIZE_MB) status=none
+
+$(BUILD_DIR):
 	mkdir -p $@
 
 # Force cargo to always re-evaluate (it has its own dep tracking)

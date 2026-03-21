@@ -1,9 +1,12 @@
-//! Block device subsystem (stub).
+//! Block device subsystem.
 //!
-//! Will contain drivers for:
-//! - NVMe
-//! - AHCI (SATA)
-//! - Virtio block (for QEMU)
+//! Currently contains:
+//! - Virtio block device driver (for QEMU)
 
-// TODO: Device registration
-// TODO: Partition table parsing (GPT, MBR)
+pub mod virtio_blk;
+pub mod virtqueue;
+
+/// Initialize all block device drivers.
+pub fn init() {
+    virtio_blk::init();
+}

@@ -160,7 +160,6 @@ fn put_char(con: &mut FbConsole, fb: &super::FrameBuffer, ch: u8) {
     }
 }
 
-// ---- CSI dispatch -----------------------------------------------------------
 
 fn dispatch_csi(con: &mut FbConsole, fb: &super::FrameBuffer, cmd: u8) {
     // Copy buffer so we can mutate `con` freely below.
@@ -232,7 +231,6 @@ const fn apply_sgr(con: &mut FbConsole, param: usize) {
     }
 }
 
-// ---- CSI parameter parsing --------------------------------------------------
 
 fn parse_single_param(buf: &[u8]) -> usize {
     let mut val = 0usize;
@@ -281,7 +279,6 @@ impl<'a> ParamIter<'a> {
     }
 }
 
-// ---- Glyph rendering --------------------------------------------------------
 
 /// Draw a single glyph at pixel position `(px, py)`.
 fn draw_glyph(

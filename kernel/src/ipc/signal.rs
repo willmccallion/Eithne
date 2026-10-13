@@ -8,10 +8,6 @@ extern crate alloc;
 
 use crate::sched::traits::TaskId;
 
-// ---------------------------------------------------------------------------
-// Signal numbers (Linux-compatible)
-// ---------------------------------------------------------------------------
-
 pub const SIGINT: u8 = 2;
 pub const SIGKILL: u8 = 9;
 pub const SIGPIPE: u8 = 13;
@@ -23,10 +19,6 @@ pub const NSIG: usize = 32;
 
 /// Unix wait status: low 7 bits encode the signal number (0 for normal exit).
 pub const WAIT_STATUS_SIGNAL_MASK: i32 = 0x7F;
-
-// ---------------------------------------------------------------------------
-// Signal action
-// ---------------------------------------------------------------------------
 
 /// User-space sentinel values for handler field in SigActionUser.
 pub const SIG_DFL: u64 = 0;
@@ -57,10 +49,6 @@ pub const fn default_action(sig: u8) -> DefaultAction {
         _ => DefaultAction::Terminate,
     }
 }
-
-// ---------------------------------------------------------------------------
-// Per-task signal state
-// ---------------------------------------------------------------------------
 
 /// Per-task signal bookkeeping, stored in the Task struct.
 ///
@@ -122,10 +110,6 @@ impl SignalState {
     }
 }
 
-// ---------------------------------------------------------------------------
-// User-space sigaction struct (matches user/shell layout)
-// ---------------------------------------------------------------------------
-
 /// Layout passed between user space and kernel for sigaction.
 #[repr(C)]
 pub struct SigActionUser {
@@ -137,10 +121,6 @@ pub struct SigActionUser {
     pub mask: u32,
     pub pad: u32,
 }
-
-// ---------------------------------------------------------------------------
-// SigFrame — pushed on user stack for signal delivery
-// ---------------------------------------------------------------------------
 
 /// Frame pushed onto the user stack when delivering a signal.
 ///
@@ -181,10 +161,6 @@ pub const SIGRETURN_TRAMPOLINE: [u8; 9] = [
     0x0f, 0x05, // syscall
     0x0f, 0x0b, // ud2
 ];
-
-// ---------------------------------------------------------------------------
-// Sending signals
-// ---------------------------------------------------------------------------
 
 /// Post a signal to a task by ID.
 ///
@@ -230,10 +206,6 @@ pub fn send_signal_locked(
     true
 }
 
-// ---------------------------------------------------------------------------
-// Checking for pending signals (used by interruptible blocking)
-// ---------------------------------------------------------------------------
-
 /// Returns true if the current task has any deliverable (pending & ~blocked)
 /// signals. Must be called with the scheduler lock held.
 pub fn has_pending_signal_locked(
@@ -244,10 +216,6 @@ pub fn has_pending_signal_locked(
         .and_then(|t| t.signals.as_ref())
         .is_some_and(SignalState::has_deliverable)
 }
-
-// ---------------------------------------------------------------------------
-// Signal delivery (syscall and interrupt return paths)
-// ---------------------------------------------------------------------------
 
 /// Information extracted from the scheduler lock about a deliverable signal.
 struct DeliverInfo {
@@ -445,10 +413,6 @@ const fn push_sigframe(frame: &mut crate::arch::x86_64::syscall::SyscallFrame, i
     frame.rflags = 0x202;
 }
 
-// ---------------------------------------------------------------------------
-// sigreturn — restore context from SigFrame
-// ---------------------------------------------------------------------------
-
 /// Restore the interrupted context from a SigFrame on the user stack.
 ///
 /// Called from the `sys_sigreturn` handler. Reads the SigFrame from the
@@ -501,10 +465,6 @@ pub fn do_sigreturn(frame: &mut crate::arch::x86_64::syscall::SyscallFrame) {
     // Check for newly deliverable signals after mask restore.
     deliver_pending_signal(frame);
 }
-
-// ---------------------------------------------------------------------------
-// Initialization
-// ---------------------------------------------------------------------------
 
 /// Initialize the signal subsystem. Currently a no-op since all state
 /// is per-task, but reserves the slot for future global signal infrastructure.

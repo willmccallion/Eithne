@@ -13,17 +13,9 @@ use super::context::InterruptFrame;
 use super::process::{Task, TaskState};
 use super::traits::TaskId;
 
-// ---------------------------------------------------------------------------
-// Segment selectors (must match gdt.rs)
-// ---------------------------------------------------------------------------
-
 const USER_CS: u64 = 0x18 | 3; // DPL=3
 const USER_DS: u64 = 0x20 | 3; // DPL=3
 const USER_RFLAGS: u64 = 0x202; // IF=1, reserved=1
-
-// ---------------------------------------------------------------------------
-// Public entry point
-// ---------------------------------------------------------------------------
 
 /// Create a user-mode task from an ELF binary.
 ///

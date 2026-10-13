@@ -4,7 +4,6 @@ use crate::dispatch::print_prompt;
 use libsys::io::{print, print_bytes, COMMANDS, LINE_MAX, STDIN};
 use libsys::syscall::{sys_read, NEG_EINTR};
 
-// ---- Terminal control characters ----
 
 /// Backspace (BS).
 const BS: u8 = 0x08;

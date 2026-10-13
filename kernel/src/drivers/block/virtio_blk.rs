@@ -15,10 +15,6 @@ use crate::sync::{Once, Spinlock};
 
 use super::virtqueue::{SplitVirtqueue, VirtqBuf};
 
-// ---------------------------------------------------------------------------
-// Virtio PCI constants
-// ---------------------------------------------------------------------------
-
 /// Red Hat's virtio vendor ID.
 const VIRTIO_VENDOR_ID: u16 = 0x1AF4;
 /// Transitional virtio-blk device ID.
@@ -53,10 +49,6 @@ const SECTOR_SIZE: usize = 512;
 
 /// Max poll iterations before timeout.
 const POLL_TIMEOUT: u64 = 100_000_000;
-
-// ---------------------------------------------------------------------------
-// Virtio PCI common configuration structure (spec 4.1.4.3.1)
-// ---------------------------------------------------------------------------
 
 /// Layout of the virtio PCI common configuration MMIO region.
 #[repr(C)]
@@ -93,10 +85,6 @@ struct VirtioBlkReqHeader {
     reserved: u32,
     sector: u64,
 }
-
-// ---------------------------------------------------------------------------
-// Virtio PCI capability discovery
-// ---------------------------------------------------------------------------
 
 /// Parsed virtio PCI capability pointers.
 struct VirtioPciCaps {
@@ -183,10 +171,6 @@ fn discover_caps(addr: pci::PciAddress) -> Option<VirtioPciCaps> {
 
     Some(caps)
 }
-
-// ---------------------------------------------------------------------------
-// Virtio block device
-// ---------------------------------------------------------------------------
 
 /// A virtio block device.
 struct VirtioBlkInner {
@@ -400,10 +384,6 @@ impl BlockDevice for VirtioBlkDevice {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Device initialization (virtio spec 3.1.1)
-// ---------------------------------------------------------------------------
-
 impl VirtioBlkDevice {
     /// Probe and initialize a virtio-blk PCI device.
     pub fn probe() -> Option<Self> {
@@ -543,10 +523,6 @@ impl VirtioBlkDevice {
         })
     }
 }
-
-// ---------------------------------------------------------------------------
-// Global singleton
-// ---------------------------------------------------------------------------
 
 static VIRTIO_BLK: Once<VirtioBlkDevice> = Once::new();
 

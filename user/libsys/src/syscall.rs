@@ -27,10 +27,6 @@ const SYS_CHDIR: usize = 80;
 const SYS_BRK: usize = 12;
 const SYS_READDIR: usize = 217;
 
-// ---------------------------------------------------------------------------
-// Linux O_* flags
-// ---------------------------------------------------------------------------
-
 /// Open file for reading only.
 pub const O_RDONLY: usize = 0;
 /// Open file for writing only.
@@ -44,10 +40,6 @@ pub const O_APPEND: usize = 0x400;
 
 /// Linux directory entry type for directories.
 pub const DT_DIR: u8 = 4;
-
-// ---------------------------------------------------------------------------
-// Inline syscall helpers
-// ---------------------------------------------------------------------------
 
 #[allow(clippy::inline_always)]
 #[inline(always)]
@@ -118,10 +110,6 @@ unsafe fn syscall3(num: usize, a1: usize, a2: usize, a3: usize) -> isize {
     }
     ret
 }
-
-// ---------------------------------------------------------------------------
-// Public wrappers
-// ---------------------------------------------------------------------------
 
 /// Read from a file descriptor into `buf`. Returns bytes read or negative errno.
 pub fn sys_read(fd: usize, buf: &mut [u8]) -> isize {
@@ -243,10 +231,6 @@ pub fn sys_chdir(path: &str) -> isize {
     with_cstr(path, |ptr| unsafe { syscall1(SYS_CHDIR, ptr as usize) })
 }
 
-// ---------------------------------------------------------------------------
-// brk / sbrk
-// ---------------------------------------------------------------------------
-
 /// Adjust the program break by `increment` bytes.
 ///
 /// Returns a pointer to the start of the newly allocated region on success,
@@ -275,10 +259,6 @@ pub fn sys_sbrk(increment: isize) -> *mut u8 {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Signal constants
-// ---------------------------------------------------------------------------
-
 /// Interrupt signal (Ctrl+C).
 pub const SIGINT: usize = 2;
 /// Broken pipe signal.
@@ -305,10 +285,6 @@ pub const SIG_DFL: u64 = 0;
 /// Ignore signal sentinel.
 pub const SIG_IGN: u64 = 1;
 
-// ---------------------------------------------------------------------------
-// Unix file type constants (S_IF* from <sys/stat.h>)
-// ---------------------------------------------------------------------------
-
 /// File type mask.
 pub const S_IFMT: u32 = 0o170000;
 /// FIFO (named pipe).
@@ -325,10 +301,6 @@ pub const S_IFREG: u32 = 0o100000;
 pub const S_IFLNK: u32 = 0o120000;
 /// Socket.
 pub const S_IFSOCK: u32 = 0o140000;
-
-// ---------------------------------------------------------------------------
-// Types matching kernel structs
-// ---------------------------------------------------------------------------
 
 /// File status buffer (matches the kernel's `UserStat` layout).
 #[repr(C)]
@@ -430,19 +402,11 @@ impl DirEntry {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Errno constants
-// ---------------------------------------------------------------------------
-
 /// Negative `EINTR` — syscall interrupted by signal.
 pub const NEG_EINTR: isize = -4;
 
 /// Negative `EINVAL` — invalid argument (e.g. path too long).
 const NEG_EINVAL: isize = -22;
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
 
 /// Copy a Rust `&str` to a NUL-terminated buffer on the stack, then call `f`.
 fn with_cstr(s: &str, f: impl FnOnce(*const u8) -> isize) -> isize {

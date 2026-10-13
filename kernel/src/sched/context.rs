@@ -16,10 +16,6 @@ use core::arch::global_asm;
 use crate::mm::page::PAGE_SIZE;
 use crate::mm::{VirtAddr, addr::virt_to_phys, frame};
 
-// ---------------------------------------------------------------------------
-// InterruptFrame — must match the push order in isr_common (idt.rs)
-// ---------------------------------------------------------------------------
-
 #[repr(C)]
 pub struct InterruptFrame {
     pub r15: u64,
@@ -49,10 +45,6 @@ pub struct InterruptFrame {
 
 /// RFLAGS for a new kernel thread: IF=1 + reserved bit 1.
 pub const RFLAGS_KERNEL_IF: u64 = 0x202;
-
-// ---------------------------------------------------------------------------
-// TaskStack
-// ---------------------------------------------------------------------------
 
 pub struct TaskStack {
     base: VirtAddr,
@@ -142,10 +134,6 @@ impl Drop for TaskStack {
     }
 }
 
-// ---------------------------------------------------------------------------
-// sched_iretq_exit — single resume path: pop InterruptFrame + iretq
-// ---------------------------------------------------------------------------
-
 global_asm!(
     ".align 16",
     ".globl sched_iretq_exit",
@@ -169,10 +157,7 @@ global_asm!(
     "iretq",
 );
 
-// ---------------------------------------------------------------------------
-// yield_now(old_rsp_ptr: *mut u64, new_rsp: u64)  [MS ABI: rcx, rdx]
-// ---------------------------------------------------------------------------
-//
+// yield_now(old_rsp_ptr: *mut u64, new_rsp: u64), MS ABI: rcx, rdx.
 // Builds a synthetic InterruptFrame on the current kernel stack so this task
 // can be resumed via sched_iretq_exit.  The saved RIP points at .Lresume,
 // which executes `ret` back to yield_cpu's caller.

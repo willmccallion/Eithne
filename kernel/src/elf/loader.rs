@@ -12,10 +12,6 @@ use crate::mm::traits::{PageFlags, PageMapper};
 
 use super::parser::{Elf64Info, Elf64Phdr, PF_W, PF_X, R_X86_64_RELATIVE};
 
-// ---------------------------------------------------------------------------
-// Errors
-// ---------------------------------------------------------------------------
-
 #[derive(Debug)]
 pub enum ElfLoadError {
     Parse(super::parser::ElfParseError),
@@ -38,10 +34,6 @@ impl From<crate::mm::traits::MapError> for ElfLoadError {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Result type
-// ---------------------------------------------------------------------------
-
 pub struct LoadedElf {
     pub aspace: KernelAddressSpace,
     pub entry_point: u64,
@@ -50,20 +42,12 @@ pub struct LoadedElf {
     pub brk: u64,
 }
 
-// ---------------------------------------------------------------------------
-// Constants
-// ---------------------------------------------------------------------------
-
 /// Number of pages for the user stack (64 KiB).
 const USER_STACK_PAGES: usize = 16;
 
 /// Offset from user_base for the stack top (high within the PML4 slot,
 /// well above where ELF segments are typically linked).
 const USER_STACK_OFFSET: u64 = 0x7FFF_0000;
-
-// ---------------------------------------------------------------------------
-// Loader
-// ---------------------------------------------------------------------------
 
 /// Load an ELF binary into a new user address space.
 ///

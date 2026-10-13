@@ -14,10 +14,6 @@ use core::ptr;
 
 use super::Allocator;
 
-// ---------------------------------------------------------------------------
-// Constants
-// ---------------------------------------------------------------------------
-
 /// Minimum alignment for all allocations (8 bytes on 64-bit).
 const ALIGNMENT: usize = 8;
 
@@ -44,10 +40,6 @@ const NBINS: usize = NSMALLBINS + NLARGEBINS;
 /// Minimum heap growth via sbrk (128 KiB).
 const MIN_SBRK_SIZE: usize = 128 * 1024;
 
-// ---------------------------------------------------------------------------
-// Chunk flags (stored in low bits of the size field)
-// ---------------------------------------------------------------------------
-
 /// The previous chunk (lower address) is in use.  When clear, the prev_size
 /// field at the end of the previous chunk is valid and can be used to find
 /// the previous chunk's header for coalescing.
@@ -58,10 +50,6 @@ const THIS_IN_USE: usize = 0x2;
 
 /// Mask to extract the actual chunk size (clear flag bits).
 const SIZE_MASK: usize = !(PREV_IN_USE | THIS_IN_USE);
-
-// ---------------------------------------------------------------------------
-// Chunk header
-// ---------------------------------------------------------------------------
 
 /// Header for a heap chunk.
 ///
@@ -161,10 +149,6 @@ impl Chunk {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Bin sentinel node
-// ---------------------------------------------------------------------------
-
 /// Sentinel node for a bin's doubly-linked free list.
 ///
 /// When a bin is empty, `fd` and `bk` both point to the sentinel itself.
@@ -197,10 +181,6 @@ impl BinHead {
         self as *mut Self as *mut Chunk
     }
 }
-
-// ---------------------------------------------------------------------------
-// Allocator state
-// ---------------------------------------------------------------------------
 
 struct DlMallocState {
     bins: [BinHead; NBINS],
@@ -235,10 +215,6 @@ impl DlMallocState {
         self.initialized = true;
     }
 
-    // -----------------------------------------------------------------------
-    // Bin index computation
-    // -----------------------------------------------------------------------
-
     #[inline]
     const fn small_index(size: usize) -> usize {
         (size / ALIGNMENT) - 2
@@ -254,10 +230,6 @@ impl DlMallocState {
         }
         idx
     }
-
-    // -----------------------------------------------------------------------
-    // Free list operations
-    // -----------------------------------------------------------------------
 
     unsafe fn insert_chunk(&mut self, chunk: *mut Chunk) {
         unsafe {
@@ -314,10 +286,6 @@ impl DlMallocState {
         }
     }
 
-    // -----------------------------------------------------------------------
-    // Coalescing
-    // -----------------------------------------------------------------------
-
     unsafe fn coalesce(&mut self, chunk: *mut Chunk) -> (*mut Chunk, usize) {
         unsafe {
             let mut p = chunk;
@@ -366,10 +334,6 @@ impl DlMallocState {
         }
     }
 
-    // -----------------------------------------------------------------------
-    // Splitting
-    // -----------------------------------------------------------------------
-
     unsafe fn use_chunk(&mut self, chunk: *mut Chunk, needed: usize) -> *mut u8 {
         unsafe {
             let size = (*chunk).chunk_size();
@@ -404,10 +368,6 @@ impl DlMallocState {
         }
     }
 
-    // -----------------------------------------------------------------------
-    // Heap growth
-    // -----------------------------------------------------------------------
-
     unsafe fn grow_heap(&mut self, needed: usize) -> bool {
         let grow = needed.max(MIN_SBRK_SIZE);
         let base = crate::syscall::sys_sbrk(grow as isize);
@@ -431,10 +391,6 @@ impl DlMallocState {
 
         true
     }
-
-    // -----------------------------------------------------------------------
-    // Core allocation
-    // -----------------------------------------------------------------------
 
     unsafe fn malloc(&mut self, mut size: usize) -> *mut u8 {
         unsafe {
@@ -538,10 +494,6 @@ impl DlMallocState {
         }
     }
 
-    // -----------------------------------------------------------------------
-    // Core deallocation
-    // -----------------------------------------------------------------------
-
     unsafe fn free(&mut self, ptr: *mut u8) {
         if ptr.is_null() {
             return;
@@ -564,10 +516,6 @@ impl DlMallocState {
         }
     }
 }
-
-// ---------------------------------------------------------------------------
-// Public allocator type
-// ---------------------------------------------------------------------------
 
 /// A dlmalloc-style allocator.
 ///

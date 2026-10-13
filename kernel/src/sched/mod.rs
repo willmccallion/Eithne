@@ -16,10 +16,6 @@ use context::yield_now;
 use process::Task;
 use round_robin::RoundRobinScheduler;
 
-// ---------------------------------------------------------------------------
-// Global state
-// ---------------------------------------------------------------------------
-
 static SCHEDULER: Once<IrqSpinlock<RoundRobinScheduler>> = Once::new();
 
 /// Run a closure with the scheduler lock held (used by fork which needs
@@ -35,10 +31,6 @@ where
 /// Set by the timer IRQ when the current timeslice expires.
 /// Cleared and acted on by `check_resched` at the `isr_common` exit.
 pub static NEED_RESCHED: AtomicBool = AtomicBool::new(false);
-
-// ---------------------------------------------------------------------------
-// Public API
-// ---------------------------------------------------------------------------
 
 pub fn init() {
     let _ = SCHEDULER.call_once(|| IrqSpinlock::new(RoundRobinScheduler::new()));
@@ -425,10 +417,6 @@ pub fn yield_cpu() {
         unsafe { yield_now(p.old_rsp_ptr, p.new_rsp) };
     }
 }
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
 
 /// Activate the incoming task: switch address space and update SYSCALL_KSTACK_TOP.
 ///

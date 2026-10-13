@@ -50,10 +50,6 @@ pub fn dispatch(num: usize, args: &[usize; 6]) -> SyscallResult {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
 /// Validate that a user pointer is in user address space.
 const fn validate_user_ptr(ptr: usize) -> Result<(), SyscallError> {
     if ptr == 0 || ptr >= KERNEL_SPACE_START {
@@ -133,10 +129,6 @@ const fn linux_flags_to_open_flags(flags: usize) -> OpenFlags {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Default stdio helpers (serial + framebuffer)
-// ---------------------------------------------------------------------------
-
 /// Default stdin: blocking read from the serial console.
 fn default_stdin_read(ptr: *mut u8, len: usize) -> SyscallResult {
     let buf = unsafe { core::slice::from_raw_parts_mut(ptr, len) };
@@ -179,10 +171,7 @@ fn default_console_write(ptr: *const u8, len: usize) -> SyscallResult {
     Ok(len)
 }
 
-// ---------------------------------------------------------------------------
-// sys_read(fd, buf_ptr, len) -> bytes_read
-// ---------------------------------------------------------------------------
-
+/// `sys_read(fd, buf_ptr, len) -> bytes_read`
 fn sys_read(args: &[usize; 6]) -> SyscallResult {
     let fd = args[0];
     let ptr = args[1] as *mut u8;
@@ -219,10 +208,7 @@ fn sys_read(args: &[usize; 6]) -> SyscallResult {
     }
 }
 
-// ---------------------------------------------------------------------------
-// sys_write(fd, buf_ptr, len) -> bytes_written
-// ---------------------------------------------------------------------------
-
+/// `sys_write(fd, buf_ptr, len) -> bytes_written`
 fn sys_write(args: &[usize; 6]) -> SyscallResult {
     let fd = args[0];
     let ptr = args[1] as *const u8;
@@ -258,10 +244,7 @@ fn sys_write(args: &[usize; 6]) -> SyscallResult {
     }
 }
 
-// ---------------------------------------------------------------------------
-// sys_open(path_ptr, flags, mode) -> fd
-// ---------------------------------------------------------------------------
-
+/// `sys_open(path_ptr, flags, mode) -> fd`
 fn sys_open(args: &[usize; 6]) -> SyscallResult {
     let path = copy_and_resolve_path(args[0])?;
     let flags = linux_flags_to_open_flags(args[1]);
@@ -271,10 +254,7 @@ fn sys_open(args: &[usize; 6]) -> SyscallResult {
     Ok(fd)
 }
 
-// ---------------------------------------------------------------------------
-// sys_close(fd) -> 0
-// ---------------------------------------------------------------------------
-
+/// `sys_close(fd) -> 0`
 fn sys_close(args: &[usize; 6]) -> SyscallResult {
     let fd = args[0];
 
@@ -300,10 +280,7 @@ fn sys_close(args: &[usize; 6]) -> SyscallResult {
     Ok(0)
 }
 
-// ---------------------------------------------------------------------------
-// sys_pipe(fds_ptr) -> 0
-// ---------------------------------------------------------------------------
-
+/// `sys_pipe(fds_ptr) -> 0`
 fn sys_pipe(args: &[usize; 6]) -> SyscallResult {
     let fds_ptr = args[0];
     validate_user_ptr(fds_ptr)?;
@@ -334,10 +311,6 @@ fn sys_pipe(args: &[usize; 6]) -> SyscallResult {
 
     Ok(0)
 }
-
-// ---------------------------------------------------------------------------
-// sys_dup2(old_fd, new_fd) -> new_fd
-// ---------------------------------------------------------------------------
 
 fn sys_dup2(args: &[usize; 6]) -> SyscallResult {
     let old_fd = args[0];
@@ -394,13 +367,10 @@ fn sys_dup2(args: &[usize; 6]) -> SyscallResult {
     Ok(new_fd)
 }
 
-// ---------------------------------------------------------------------------
-// sys_stat(path_ptr, statbuf_ptr) -> 0
-// ---------------------------------------------------------------------------
-
-/// Simplified Linux-compatible stat struct written to user space.
-///
-/// We only fill in the fields our VFS provides; the rest are zeroed.
+// `sys_stat(path_ptr, statbuf_ptr) -> 0`
+// Simplified Linux-compatible stat struct written to user space.
+//
+// We only fill in the fields our VFS provides; the rest are zeroed.
 #[repr(C)]
 struct UserStat {
     st_ino: u64,
@@ -445,29 +415,21 @@ fn sys_stat(args: &[usize; 6]) -> SyscallResult {
     Ok(0)
 }
 
-// ---------------------------------------------------------------------------
-// sys_mkdir(path_ptr, mode) -> 0
-// ---------------------------------------------------------------------------
-
+/// `sys_mkdir(path_ptr, mode) -> 0`
 fn sys_mkdir(args: &[usize; 6]) -> SyscallResult {
     let path = copy_and_resolve_path(args[0])?;
     crate::fs::vfs::mkdir(&path)?;
     Ok(0)
 }
 
-// ---------------------------------------------------------------------------
-// sys_unlink(path_ptr) -> 0
-// ---------------------------------------------------------------------------
-
+/// `sys_unlink(path_ptr) -> 0`
 fn sys_unlink(args: &[usize; 6]) -> SyscallResult {
     let path = copy_and_resolve_path(args[0])?;
     crate::fs::vfs::unlink(&path)?;
     Ok(0)
 }
 
-// ---------------------------------------------------------------------------
-// sys_readdir(path_ptr, buf_ptr, buf_len) -> bytes_written
-// ---------------------------------------------------------------------------
+// `sys_readdir(path_ptr, buf_ptr, buf_len) -> bytes_written`
 //
 // Custom syscall (uses getdents64 number 217).
 // Writes a sequence of UserDirEntry structs to the user buffer.
@@ -526,36 +488,24 @@ fn sys_readdir(args: &[usize; 6]) -> SyscallResult {
     Ok(written)
 }
 
-// ---------------------------------------------------------------------------
-// sys_exit(code)
-// ---------------------------------------------------------------------------
-
+/// `sys_exit(code)`
 fn sys_exit(args: &[usize; 6]) -> SyscallResult {
     let code = args[0] as i32;
     crate::sched::exit_current_with_code(code);
 }
 
-// ---------------------------------------------------------------------------
-// sys_getpid() -> pid
-// ---------------------------------------------------------------------------
-
+/// `sys_getpid() -> pid`
 fn sys_getpid() -> SyscallResult {
     let tid = crate::sched::current_task_id().ok_or(SyscallError::IoError)?;
     Ok(tid.0 as usize)
 }
 
-// ---------------------------------------------------------------------------
-// sys_getppid() -> parent pid
-// ---------------------------------------------------------------------------
-
+/// `sys_getppid() -> parent pid`
 fn sys_getppid() -> SyscallResult {
     crate::sched::with_current_task(|task| Ok(task.parent.map_or(0, |p| p.0 as usize)))
 }
 
-// ---------------------------------------------------------------------------
-// sys_getcwd(buf_ptr, buf_len) -> bytes_written (including NUL)
-// ---------------------------------------------------------------------------
-
+/// `sys_getcwd(buf_ptr, buf_len) -> bytes_written (including NUL)`
 fn sys_getcwd(args: &[usize; 6]) -> SyscallResult {
     let buf_ptr = args[0];
     let buf_len = args[1];
@@ -582,10 +532,7 @@ fn sys_getcwd(args: &[usize; 6]) -> SyscallResult {
     Ok(needed)
 }
 
-// ---------------------------------------------------------------------------
-// sys_chdir(path_ptr) -> 0
-// ---------------------------------------------------------------------------
-
+/// `sys_chdir(path_ptr) -> 0`
 fn sys_chdir(args: &[usize; 6]) -> SyscallResult {
     let path = copy_and_resolve_path(args[0])?;
 
@@ -600,10 +547,6 @@ fn sys_chdir(args: &[usize; 6]) -> SyscallResult {
         Ok(0)
     })
 }
-
-// ---------------------------------------------------------------------------
-// sys_wait4(pid, status_ptr, options, rusage) -> child_pid
-// ---------------------------------------------------------------------------
 
 /// `pid` semantics:
 ///   - `usize::MAX` (i.e. -1 as unsigned): wait for any child
@@ -636,10 +579,7 @@ fn sys_wait4(args: &[usize; 6]) -> SyscallResult {
     Ok(pid as usize)
 }
 
-// ---------------------------------------------------------------------------
-// sys_kill(pid, sig) -> 0
-// ---------------------------------------------------------------------------
-
+/// `sys_kill(pid, sig) -> 0`
 fn sys_kill(args: &[usize; 6]) -> SyscallResult {
     let pid = args[0] as u64;
     let sig = args[1] as u8;
@@ -656,10 +596,7 @@ fn sys_kill(args: &[usize; 6]) -> SyscallResult {
     }
 }
 
-// ---------------------------------------------------------------------------
-// sys_sigaction(sig, new_act_ptr, old_act_ptr) -> 0
-// ---------------------------------------------------------------------------
-
+/// `sys_sigaction(sig, new_act_ptr, old_act_ptr) -> 0`
 fn sys_sigaction(args: &[usize; 6]) -> SyscallResult {
     use crate::ipc::signal::{NSIG, SIG_DFL, SIG_IGN, SIGKILL, SigAction, SigActionUser};
 
@@ -722,11 +659,8 @@ fn sys_sigaction(args: &[usize; 6]) -> SyscallResult {
     Ok(0)
 }
 
-// ---------------------------------------------------------------------------
-// sys_sigprocmask(how, set_ptr, oldset_ptr) -> 0
-// ---------------------------------------------------------------------------
-
-/// sigprocmask `how` values (Linux-compatible).
+// `sys_sigprocmask(how, set_ptr, oldset_ptr) -> 0`
+// sigprocmask `how` values (Linux-compatible).
 const SIG_BLOCK: usize = 0;
 const SIG_UNBLOCK: usize = 1;
 const SIG_SETMASK: usize = 2;
@@ -782,13 +716,10 @@ fn sys_sigprocmask(args: &[usize; 6]) -> SyscallResult {
     Ok(0)
 }
 
-// ---------------------------------------------------------------------------
-// sys_brk(new_brk) -> current_brk
-// ---------------------------------------------------------------------------
-//
-// If new_brk == 0, returns the current program break.
-// Otherwise, grows or shrinks the heap by mapping/unmapping pages.
-
+/// `sys_brk(new_brk) -> current_brk`
+///
+/// If new_brk == 0, returns the current program break.
+/// Otherwise, grows or shrinks the heap by mapping/unmapping pages.
 fn sys_brk(args: &[usize; 6]) -> SyscallResult {
     use crate::mm::addr::VirtAddr;
     use crate::mm::page::PAGE_SIZE;

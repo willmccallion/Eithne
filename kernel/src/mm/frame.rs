@@ -13,10 +13,6 @@ use super::page::{self, MAX_ORDER, PAGE_SIZE};
 use super::traits::FrameAllocator;
 use crate::sync::{Once, Spinlock};
 
-// ---------------------------------------------------------------------------
-// Free list node — stored in the free page itself (identity-mapped).
-// ---------------------------------------------------------------------------
-
 /// Intrusive doubly-linked list node written into free pages.
 /// Minimum page size is 4 KiB, so there's always room for two pointers.
 #[repr(C)]
@@ -108,10 +104,6 @@ impl FreeList {
         self.count -= 1;
     }
 }
-
-// ---------------------------------------------------------------------------
-// Buddy allocator
-// ---------------------------------------------------------------------------
 
 pub struct BuddyAllocator {
     /// One free list per order (0..MAX_ORDER).
@@ -365,10 +357,6 @@ impl FrameAllocator for BuddyAllocator {
         self.free_pages
     }
 }
-
-// ---------------------------------------------------------------------------
-// Global singleton
-// ---------------------------------------------------------------------------
 
 static FRAME_ALLOCATOR: Once<Spinlock<BuddyAllocator>> = Once::new();
 

@@ -182,10 +182,6 @@ impl Vfs {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Global singleton + public API
-// ---------------------------------------------------------------------------
-
 static VFS: Once<Vfs> = Once::new();
 
 /// Initialize the VFS and mount the root ramfs.

@@ -3,10 +3,6 @@
 /// Exit code used when exec fails (standard Unix convention).
 pub const EXEC_FAILURE_EXIT_CODE: usize = 127;
 
-// ---------------------------------------------------------------------------
-// Argv builder for exec
-// ---------------------------------------------------------------------------
-
 /// Maximum number of arguments for exec (including argv[0]).
 const MAX_EXEC_ARGS: usize = 64;
 

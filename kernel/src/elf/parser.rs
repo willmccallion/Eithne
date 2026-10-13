@@ -5,10 +5,6 @@
 
 use core::mem;
 
-// ---------------------------------------------------------------------------
-// Constants
-// ---------------------------------------------------------------------------
-
 const ELF_MAGIC: [u8; 4] = [0x7F, b'E', b'L', b'F'];
 
 const ELFCLASS64: u8 = 2;
@@ -30,10 +26,6 @@ const DT_RELASZ: i64 = 8;
 
 // Relocation type constants
 pub const R_X86_64_RELATIVE: u32 = 8;
-
-// ---------------------------------------------------------------------------
-// ELF64 header (64 bytes)
-// ---------------------------------------------------------------------------
 
 #[allow(clippy::struct_field_names)]
 #[derive(Debug, Clone, Copy)]
@@ -57,10 +49,6 @@ pub struct Elf64Header {
 
 const _: () = assert!(mem::size_of::<Elf64Header>() == 64);
 
-// ---------------------------------------------------------------------------
-// ELF64 program header (56 bytes)
-// ---------------------------------------------------------------------------
-
 #[allow(clippy::struct_field_names)]
 #[derive(Debug, Clone, Copy)]
 #[repr(C)]
@@ -76,10 +64,6 @@ pub struct Elf64Phdr {
 }
 
 const _: () = assert!(mem::size_of::<Elf64Phdr>() == 56);
-
-// ---------------------------------------------------------------------------
-// ELF64 relocation entry with addend (24 bytes)
-// ---------------------------------------------------------------------------
 
 #[allow(clippy::struct_field_names)]
 #[derive(Debug, Clone, Copy)]
@@ -99,10 +83,6 @@ impl Elf64Rela {
     }
 }
 
-// ---------------------------------------------------------------------------
-// ELF64 dynamic section entry (16 bytes)
-// ---------------------------------------------------------------------------
-
 #[derive(Debug, Clone, Copy)]
 #[repr(C)]
 struct Elf64Dyn {
@@ -111,10 +91,6 @@ struct Elf64Dyn {
 }
 
 const _: () = assert!(mem::size_of::<Elf64Dyn>() == 16);
-
-// ---------------------------------------------------------------------------
-// Parse errors
-// ---------------------------------------------------------------------------
 
 #[derive(Debug)]
 pub enum ElfParseError {
@@ -127,10 +103,6 @@ pub enum ElfParseError {
     BadPhdrSize,
     Truncated,
 }
-
-// ---------------------------------------------------------------------------
-// Parsed ELF info
-// ---------------------------------------------------------------------------
 
 /// Parsed and validated ELF64 binary.
 pub struct Elf64Info<'a> {

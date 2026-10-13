@@ -12,10 +12,6 @@ use crate::sched;
 use crate::sync::{IrqSpinlock, Once};
 use crate::syscall::traits::SyscallError;
 
-// ---------------------------------------------------------------------------
-// Public types
-// ---------------------------------------------------------------------------
-
 /// Unique identifier for a pipe instance in the global table.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct PipeId(pub u64);
@@ -33,10 +29,6 @@ pub struct PipeHandle {
     pub pipe_id: PipeId,
     pub end: PipeEnd,
 }
-
-// ---------------------------------------------------------------------------
-// Internal ring buffer
-// ---------------------------------------------------------------------------
 
 const PIPE_BUF_SIZE: usize = 4096;
 
@@ -96,10 +88,6 @@ impl PipeInner {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Global pipe table
-// ---------------------------------------------------------------------------
-
 struct PipeTable {
     pipes: BTreeMap<u64, PipeInner>,
     next_id: u64,
@@ -116,10 +104,6 @@ pub fn init() {
     });
     crate::println!("[pipe] pipe subsystem initialized");
 }
-
-// ---------------------------------------------------------------------------
-// Public API
-// ---------------------------------------------------------------------------
 
 /// Create a new pipe, returning (read_handle, write_handle).
 pub fn pipe_create() -> Option<(PipeHandle, PipeHandle)> {

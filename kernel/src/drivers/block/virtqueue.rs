@@ -11,10 +11,6 @@ use crate::mm::addr::{phys_to_virt, virt_to_phys, PhysAddr, VirtAddr};
 use crate::mm::frame;
 use crate::mm::page::{pages_to_order, PAGE_SIZE};
 
-// ---------------------------------------------------------------------------
-// Descriptor and ring structures (virtio spec 2.7.5 - 2.7.8)
-// ---------------------------------------------------------------------------
-
 /// Virtqueue descriptor (16 bytes).
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
@@ -59,10 +55,6 @@ struct VirtqUsed {
     idx: u16,
     // Followed by ring[queue_size]: VirtqUsedElem
 }
-
-// ---------------------------------------------------------------------------
-// Split virtqueue
-// ---------------------------------------------------------------------------
 
 /// A split virtqueue with descriptor table, available ring, and used ring.
 ///

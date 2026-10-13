@@ -10,10 +10,6 @@ pub mod dlmalloc;
 
 use core::alloc::{GlobalAlloc, Layout};
 
-// ---------------------------------------------------------------------------
-// Allocator trait
-// ---------------------------------------------------------------------------
-
 /// Trait for user-space heap allocators.
 ///
 /// Implementations must be safe to use from a single-threaded context.
@@ -49,10 +45,6 @@ pub trait Allocator {
     }
 }
 
-// ---------------------------------------------------------------------------
-// GlobalAlloc bridge
-// ---------------------------------------------------------------------------
-
 /// Bridges our `Allocator` trait to Rust's `GlobalAlloc` interface.
 ///
 /// Wraps a concrete allocator type and delegates all allocation requests.
@@ -71,10 +63,6 @@ unsafe impl<A: Allocator> GlobalAlloc for GlobalAllocBridge<A> {
         unsafe { self.0.realloc(ptr, layout, new_size) }
     }
 }
-
-// ---------------------------------------------------------------------------
-// Global allocator selection
-// ---------------------------------------------------------------------------
 
 #[global_allocator]
 static ALLOCATOR: GlobalAllocBridge<dlmalloc::DlMalloc> =

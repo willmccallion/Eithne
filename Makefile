@@ -12,10 +12,6 @@
 #   make rebuild  - clean + full rebuild
 #   make check    - cargo build + clippy
 
-# ---------------------------------------------------------------------------
-# Configuration
-# ---------------------------------------------------------------------------
-
 ARCH          ?= x86_64
 
 # Rust / Cargo
@@ -36,10 +32,6 @@ else
   $(error Unsupported ARCH=$(ARCH). Only x86_64 is implemented)
 endif
 
-# ---------------------------------------------------------------------------
-# Paths
-# ---------------------------------------------------------------------------
-
 BUILD_DIR     := target
 
 # Virtio block disk image
@@ -57,10 +49,6 @@ USER_BINS      := cat ls mkdir rm stat write
 ESP_BOOT_DIR  := $(ESP_DIR)/EFI/BOOT
 ESP_APP_DIR   := $(ESP_DIR)/EFI/eithne
 ESP_BIN_DIR   := $(ESP_DIR)/EFI/eithne/bin
-
-# ---------------------------------------------------------------------------
-# Phony targets
-# ---------------------------------------------------------------------------
 
 .PHONY: all kernel user esp disk run run-gui clippy check clean rebuild
 
@@ -116,10 +104,6 @@ clean:
 	rm -rf $(ESP_DIR)
 
 rebuild: clean all
-
-# ---------------------------------------------------------------------------
-# Build rules
-# ---------------------------------------------------------------------------
 
 # Kernel EFI binary
 $(EFI_BINARY): FORCE

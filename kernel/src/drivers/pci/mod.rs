@@ -90,10 +90,6 @@ pub enum Bar {
     None,
 }
 
-// ---------------------------------------------------------------------------
-// Configuration space access
-// ---------------------------------------------------------------------------
-
 /// Build the PCI config address for a given bus/device/function/offset.
 const fn config_addr(bus: u8, device: u8, function: u8, offset: u8) -> u32 {
     (1u32 << 31)
@@ -132,10 +128,6 @@ pub fn config_read8(bus: u8, device: u8, function: u8, offset: u8) -> u8 {
     let val32 = config_read32(bus, device, function, offset);
     ((val32 >> ((offset & 3) * 8)) & 0xFF) as u8
 }
-
-// ---------------------------------------------------------------------------
-// BAR parsing
-// ---------------------------------------------------------------------------
 
 /// Parse a BAR from a PCI device, determining its type, base address, and size.
 pub fn parse_bar(addr: PciAddress, bar_index: u8) -> Bar {
@@ -200,10 +192,6 @@ pub fn parse_bar(addr: PciAddress, bar_index: u8) -> Bar {
         }
     }
 }
-
-// ---------------------------------------------------------------------------
-// Bus enumeration
-// ---------------------------------------------------------------------------
 
 /// Scan all PCI buses and return discovered devices.
 fn enumerate() -> Vec<PciDevice> {
@@ -274,10 +262,6 @@ fn enumerate() -> Vec<PciDevice> {
     devices
 }
 
-// ---------------------------------------------------------------------------
-// PCI capability list walking
-// ---------------------------------------------------------------------------
-
 /// Walk the PCI capability list, calling `f` for each capability.
 ///
 /// `f` receives `(cap_id, cap_offset)` and returns `true` to stop iteration.
@@ -300,10 +284,6 @@ pub fn walk_capabilities(
         offset = config_read8(addr.bus, addr.device, addr.function, offset + 1) & !0x3;
     }
 }
-
-// ---------------------------------------------------------------------------
-// Global singleton + init
-// ---------------------------------------------------------------------------
 
 static PCI_DEVICES: Once<Spinlock<Vec<PciDevice>>> = Once::new();
 

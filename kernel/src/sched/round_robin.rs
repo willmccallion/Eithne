@@ -198,10 +198,6 @@ impl RoundRobinScheduler {
         self.ticks_remaining == 0
     }
 
-    // ------------------------------------------------------------------
-    // Process management (fork / exit / wait)
-    // ------------------------------------------------------------------
-
     /// TaskId of the currently running task.
     pub fn current_id(&self) -> Option<TaskId> {
         self.current.as_ref().map(|t| t.id)

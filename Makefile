@@ -32,14 +32,8 @@ ifeq ($(ARCH),x86_64)
   QEMU        := qemu-system-x86_64
   BOOT_FILE   := BOOTX64.EFI
   QEMU_EXTRA  :=
-else ifeq ($(ARCH),aarch64)
-  UEFI_TARGET := aarch64-unknown-uefi
-  OVMF        := /usr/share/edk2/aarch64/QEMU_EFI.fd
-  QEMU        := qemu-system-aarch64
-  BOOT_FILE   := BOOTAA64.EFI
-  QEMU_EXTRA  := -machine virt -cpu cortex-a72
 else
-  $(error Unsupported ARCH=$(ARCH). Use x86_64 or aarch64)
+  $(error Unsupported ARCH=$(ARCH). Only x86_64 is implemented)
 endif
 
 # ---------------------------------------------------------------------------

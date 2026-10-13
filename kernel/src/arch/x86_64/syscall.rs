@@ -95,9 +95,6 @@ pub fn init() {
     );
 }
 
-// ---------------------------------------------------------------------------
-// Syscall entry stub
-// ---------------------------------------------------------------------------
 //
 // On SYSCALL entry the CPU has:
 //   RCX = saved user RIP
@@ -222,10 +219,6 @@ pub fn set_syscall_stack(rsp_top: u64) {
     super::gdt::set_rsp0(rsp_top);
 }
 
-// ---------------------------------------------------------------------------
-// Syscall frame — mirrors isr_common's InterruptFrame
-// ---------------------------------------------------------------------------
-
 /// Register state saved on the kernel stack by `syscall_entry`.
 /// Layout must match the push sequence above exactly.
 #[repr(C)]
@@ -253,14 +246,6 @@ pub struct SyscallFrame {
     pub rsp: u64, // user RSP
     pub ss: u64,
 }
-
-// ---------------------------------------------------------------------------
-// Rust syscall dispatcher
-// ---------------------------------------------------------------------------
-
-// ---------------------------------------------------------------------------
-// Linux errno constants
-// ---------------------------------------------------------------------------
 
 const EPERM: u64 = 1;
 const ENOENT: u64 = 2;
@@ -343,10 +328,6 @@ extern "C" fn syscall_dispatch(frame: &mut SyscallFrame) {
     // Check for pending signals before returning to user space.
     crate::ipc::signal::deliver_pending_signal(frame);
 }
-
-// ---------------------------------------------------------------------------
-// fork()
-// ---------------------------------------------------------------------------
 
 /// User-mode segment selectors (must match gdt.rs).
 const USER_CS: u64 = 0x18 | 3;
@@ -475,10 +456,6 @@ fn do_fork(parent_frame: &SyscallFrame) -> u64 {
     // Parent gets the child's PID.
     child_id.0
 }
-
-// ---------------------------------------------------------------------------
-// exec(path, argv)
-// ---------------------------------------------------------------------------
 
 /// Maximum number of arguments passed to exec.
 const ARGV_MAX: usize = 64;

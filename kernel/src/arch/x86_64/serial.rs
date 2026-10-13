@@ -4,10 +4,6 @@
 
 use super::io::{inb, outb};
 
-// ---------------------------------------------------------------------------
-// Port base and register offsets
-// ---------------------------------------------------------------------------
-
 const COM1: u16 = 0x3F8;
 
 /// Offsets from the COM port base address.
@@ -18,46 +14,22 @@ const REG_LCR: u16 = 3; // Line Control Register
 const REG_MCR: u16 = 4; // Modem Control Register
 const REG_LSR: u16 = 5; // Line Status Register
 
-// ---------------------------------------------------------------------------
-// Line Status Register bits
-// ---------------------------------------------------------------------------
-
 const LSR_DATA_READY: u8 = 1 << 0;
 const LSR_THR_EMPTY: u8 = 1 << 5;
 
-// ---------------------------------------------------------------------------
-// Interrupt Enable Register bits
-// ---------------------------------------------------------------------------
-
 const IER_RX_AVAILABLE: u8 = 1 << 0;
-
-// ---------------------------------------------------------------------------
-// Line Control Register bits
-// ---------------------------------------------------------------------------
 
 const LCR_DLAB: u8 = 0x80; // Divisor Latch Access Bit
 const LCR_8N1: u8 = 0x03; // 8 data bits, no parity, 1 stop bit
-
-// ---------------------------------------------------------------------------
-// FIFO Control Register bits
-// ---------------------------------------------------------------------------
 
 const FCR_ENABLE_FIFO: u8 = 0x01;
 const FCR_CLEAR_RX: u8 = 0x02;
 const FCR_CLEAR_TX: u8 = 0x04;
 const FCR_TRIGGER_1: u8 = 0x00; // 1-byte trigger level (interrupt per char)
 
-// ---------------------------------------------------------------------------
-// Modem Control Register bits
-// ---------------------------------------------------------------------------
-
 const MCR_DTR: u8 = 0x01;
 const MCR_RTS: u8 = 0x02;
 const MCR_OUT2: u8 = 0x08; // required for PIC-routed interrupts
-
-// ---------------------------------------------------------------------------
-// Public API
-// ---------------------------------------------------------------------------
 
 /// Initialize COM1 serial port at 115200 baud, 8N1.
 pub fn init() {

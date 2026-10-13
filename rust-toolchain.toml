@@ -4,5 +4,4 @@ components = ["rust-src", "rustfmt", "clippy"]
 targets = [
     "x86_64-unknown-uefi",
     "x86_64-unknown-none",
-    "aarch64-unknown-uefi",
 ]

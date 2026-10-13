@@ -21,10 +21,6 @@ const GDT_ENTRY_COUNT: usize = 7;
 /// IST stack size: 2 pages (8 KiB) each.
 const IST_STACK_PAGES: usize = 2;
 
-// ---------------------------------------------------------------------------
-// GDT entry encoding
-// ---------------------------------------------------------------------------
-
 /// A single 8-byte GDT segment descriptor.
 #[derive(Clone, Copy)]
 #[repr(transparent)]
@@ -68,10 +64,6 @@ impl GdtEntry {
         Self::new(0, 0xFFFFF, 0xF2, 0xC)
     }
 }
-
-// ---------------------------------------------------------------------------
-// TSS
-// ---------------------------------------------------------------------------
 
 /// Task State Segment (64-bit mode, 104 bytes).
 #[repr(C, packed)]
@@ -117,10 +109,6 @@ fn tss_descriptor(tss: &Tss) -> (u64, u64) {
     (low, high)
 }
 
-// ---------------------------------------------------------------------------
-// Static storage
-// ---------------------------------------------------------------------------
-
 #[repr(C, align(16))]
 struct GdtStorage {
     entries: UnsafeCell<[u64; GDT_ENTRY_COUNT]>,
@@ -141,19 +129,11 @@ static TSS_STORAGE: TssStorage = TssStorage {
     tss: UnsafeCell::new(Tss::new()),
 };
 
-// ---------------------------------------------------------------------------
-// GDTR pseudo-descriptor
-// ---------------------------------------------------------------------------
-
 #[repr(C, packed)]
 struct GdtPointer {
     limit: u16,
     base: u64,
 }
-
-// ---------------------------------------------------------------------------
-// Initialization
-// ---------------------------------------------------------------------------
 
 /// Initialize the GDT with TSS and IST stacks.
 /// Must be called after mm::init() (needs frame allocator for IST stacks).

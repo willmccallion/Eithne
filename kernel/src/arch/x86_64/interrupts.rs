@@ -6,10 +6,6 @@ use super::idt::InterruptFrame;
 use super::io::{inb, io_wait, outb};
 use core::sync::atomic::{AtomicU64, Ordering};
 
-// ---------------------------------------------------------------------------
-// 8259 PIC I/O ports
-// ---------------------------------------------------------------------------
-
 const PIC1_CMD: u16 = 0x20;
 const PIC1_DATA: u16 = 0x21;
 const PIC2_CMD: u16 = 0xA0;
@@ -24,10 +20,6 @@ const PIC_EOI: u8 = 0x20;
 pub const PIC1_OFFSET: u8 = 32;
 pub const PIC2_OFFSET: u8 = 40;
 
-// ---------------------------------------------------------------------------
-// IRQ line numbers (master PIC = 0-7, slave PIC = 8-15)
-// ---------------------------------------------------------------------------
-
 const IRQ_TIMER: u8 = 0;
 const IRQ_KEYBOARD: u8 = 1;
 const IRQ_COM1: u8 = 4;
@@ -37,10 +29,6 @@ const PS2_DATA_PORT: u16 = 0x60;
 
 /// Timer tick counter.
 static TIMER_TICKS: AtomicU64 = AtomicU64::new(0);
-
-// ---------------------------------------------------------------------------
-// PIC initialization
-// ---------------------------------------------------------------------------
 
 /// Initialize and remap the 8259 PIC to vectors 32-47.
 pub fn init_pic() {
@@ -94,10 +82,6 @@ pub fn init_pic() {
     );
 }
 
-// ---------------------------------------------------------------------------
-// EOI and masking
-// ---------------------------------------------------------------------------
-
 /// Send End-of-Interrupt to the PIC(s).
 pub fn send_eoi(irq: u8) {
     unsafe {
@@ -136,10 +120,6 @@ pub fn mask_irq(irq: u8) {
         }
     }
 }
-
-// ---------------------------------------------------------------------------
-// IRQ dispatch
-// ---------------------------------------------------------------------------
 
 /// Called from the IDT dispatcher for vectors 32-47.
 pub fn irq_handler(irq: u8, _frame: &InterruptFrame) {

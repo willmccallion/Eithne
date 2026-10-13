@@ -36,10 +36,6 @@ pub fn save_boot_mappings() {
     });
 }
 
-// ---------------------------------------------------------------------------
-// Page table entry flags
-// ---------------------------------------------------------------------------
-
 /// x86_64 page table entry flag bits.
 #[allow(dead_code)]
 mod flags {
@@ -57,10 +53,6 @@ mod flags {
     /// Mask that strips flags and extracts the 4 KiB-aligned physical address.
     pub const ADDR_MASK: u64 = 0x000F_FFFF_FFFF_F000;
 }
-
-// ---------------------------------------------------------------------------
-// PageTableEntry
-// ---------------------------------------------------------------------------
 
 /// A single 8-byte entry in a page table at any level.
 #[derive(Clone, Copy)]
@@ -118,10 +110,6 @@ impl PageTableEntry {
     }
 }
 
-// ---------------------------------------------------------------------------
-// PageTable
-// ---------------------------------------------------------------------------
-
 /// A 512-entry page table (PML4, PDPT, PD, or PT).
 /// Must be exactly one 4 KiB page and page-aligned.
 #[repr(C, align(4096))]
@@ -138,10 +126,6 @@ impl PageTable {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Index extraction from a virtual address
-// ---------------------------------------------------------------------------
-
 /// Split a virtual address into its four 9-bit page table indices and the
 /// 12-bit page offset.
 #[inline]
@@ -154,10 +138,6 @@ const fn va_indices(va: VirtAddr) -> (usize, usize, usize, usize, usize) {
     let off = (v & 0xFFF) as usize;
     (pml4, pdpt, pd, pt, off)
 }
-
-// ---------------------------------------------------------------------------
-// Helper: allocate and zero a new page table frame
-// ---------------------------------------------------------------------------
 
 /// Allocate one physical frame, zero it, and return a mutable reference to
 /// it interpreted as a `PageTable`. Returns `None` on OOM.
@@ -180,10 +160,6 @@ unsafe fn table_from_entry<'a>(entry: PageTableEntry) -> &'a mut PageTable {
     let virt = phys_to_virt(entry.phys_addr());
     unsafe { &mut *(virt.as_mut_ptr::<PageTable>()) }
 }
-
-// ---------------------------------------------------------------------------
-// KernelAddressSpace
-// ---------------------------------------------------------------------------
 
 /// Owns an x86_64 4-level page table hierarchy.
 ///
@@ -538,10 +514,6 @@ impl AddressSpace for KernelAddressSpace {
     }
 }
 
-// ---------------------------------------------------------------------------
-// TLB flush
-// ---------------------------------------------------------------------------
-
 /// Invalidate the TLB entry for a single virtual address.
 #[inline]
 pub fn invlpg(virt: VirtAddr) {
@@ -559,10 +531,6 @@ pub fn flush_tlb() {
         asm!("mov cr3, {}", in(reg) cr3, options(nomem, nostack));
     }
 }
-
-// ---------------------------------------------------------------------------
-// PTE helpers for fork
-// ---------------------------------------------------------------------------
 
 /// Reconstruct `PageFlags` from a raw x86_64 leaf PTE.
 const fn pte_to_page_flags(entry: PageTableEntry) -> PageFlags {
@@ -587,10 +555,6 @@ const fn vaddr_from_indices(pml4: usize, pdpt: usize, pd: usize, pt: usize) -> u
     }
 }
 
-// ---------------------------------------------------------------------------
-// Higher-half setup
-// ---------------------------------------------------------------------------
-
 /// Map all of physical memory at `KERNEL_VIRT_BASE` using 1 GiB huge pages,
 /// keeping the existing identity map intact, then load the new CR3.
 ///
@@ -613,7 +577,6 @@ pub fn init_higher_half(max_phys: u64) {
     let pml4 = unsafe { &mut *(phys_to_virt(pml4_phys).as_mut_ptr::<PageTable>()) };
     pml4.zero();
 
-    // --- Copy existing UEFI identity-map entries ---
     // Read current CR3 and clone its PML4 entries into the new PML4.
     // This preserves UEFI runtime services mappings and lets us keep
     // executing after the CR3 switch.
@@ -626,7 +589,6 @@ pub fn init_higher_half(max_phys: u64) {
         pml4.entries[i] = old_pml4.entries[i];
     }
 
-    // --- Build the direct-map region at KERNEL_VIRT_BASE ---
     // KERNEL_VIRT_BASE = 0xFFFF_8000_0000_0000
     // PML4 index for that address:
     let base_pml4_idx = ((KERNEL_VIRT_BASE >> 39) & 0x1FF) as usize;
@@ -672,10 +634,6 @@ pub fn init_higher_half(max_phys: u64) {
         KERNEL_VIRT_BASE,
     );
 }
-
-// ---------------------------------------------------------------------------
-// Smoke test called from mm::init
-// ---------------------------------------------------------------------------
 
 /// Basic sanity check: allocate a fresh address space, map one page, translate
 /// it, unmap it, and verify translate returns None.

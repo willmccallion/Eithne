@@ -10,10 +10,6 @@ use super::gdt;
 
 const IDT_ENTRIES: usize = 256;
 
-// ---------------------------------------------------------------------------
-// Exception / IRQ vector numbers
-// ---------------------------------------------------------------------------
-
 /// CPU exception vectors (0-31) and PIC IRQ base.
 #[repr(u8)]
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -45,10 +41,6 @@ enum Vector {
 const IRQ_BASE: u8 = 32;
 /// Last PIC IRQ vector (IRQ15).
 const IRQ_END: u8 = 47;
-
-// ---------------------------------------------------------------------------
-// IDT entry
-// ---------------------------------------------------------------------------
 
 /// A single IDT gate descriptor (16 bytes in 64-bit mode).
 #[derive(Clone, Copy)]
@@ -103,10 +95,6 @@ impl IdtEntry {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Interrupt frame
-// ---------------------------------------------------------------------------
-
 /// Full register state on the stack during an interrupt.
 /// Layout matches the push order in the assembly stubs.
 #[repr(C)]
@@ -137,10 +125,6 @@ pub struct InterruptFrame {
     pub rsp: u64,
     pub ss: u64,
 }
-
-// ---------------------------------------------------------------------------
-// Assembly stubs
-// ---------------------------------------------------------------------------
 
 /// Generate a stub for vectors where the CPU does NOT push an error code.
 macro_rules! isr_no_err {
@@ -202,7 +186,6 @@ global_asm!(
     "sub rsp, 32",       // shadow space
     "call {dispatch}",
     "add rsp, 32",
-    // --- Preemption check ---
     // Call check_resched(interrupted_rsp=rsp) → returns new_rsp or 0
     "mov rcx, rsp",      // arg: current RSP = top of InterruptFrame
     "sub rsp, 32",
@@ -403,10 +386,6 @@ fn isr_stub_table() -> [u64; IDT_ENTRIES] {
     table
 }
 
-// ---------------------------------------------------------------------------
-// IDT storage
-// ---------------------------------------------------------------------------
-
 #[repr(C, align(16))]
 struct IdtStorage {
     entries: UnsafeCell<[IdtEntry; IDT_ENTRIES]>,
@@ -422,10 +401,6 @@ struct IdtPointer {
     limit: u16,
     base: u64,
 }
-
-// ---------------------------------------------------------------------------
-// Initialization
-// ---------------------------------------------------------------------------
 
 pub fn init() {
     crate::println!("[idt] initializing ({} entries)", IDT_ENTRIES);
@@ -467,10 +442,6 @@ pub fn init() {
 
     crate::println!("[idt] loaded at {:#x}", entries.as_ptr() as u64);
 }
-
-// ---------------------------------------------------------------------------
-// Rust interrupt dispatcher
-// ---------------------------------------------------------------------------
 
 #[unsafe(no_mangle)]
 extern "C" fn interrupt_dispatch(frame: &InterruptFrame) {

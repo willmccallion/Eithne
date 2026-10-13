@@ -110,7 +110,7 @@ Each task gets a **64 KiB kernel stack** allocated from the buddy allocator.
 
 ---
 
-The `ArchPlatform` trait abstracts early init, interrupt control, serial output, and halt — x86_64 is fully implemented; aarch64 and riscv64 have typed stubs for future porting.
+The `ArchPlatform` trait abstracts early init, interrupt control, serial output, and halt; x86_64 is the only implementation.
 
 ---
 
